@@ -15,7 +15,7 @@ from docopt import docopt
 # from subprocess import getoutput
 
 NAME = 'WhichFile'
-VERSION = '0.0.3'
+VERSION = '0.1.0'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
