@@ -12,24 +12,29 @@ import magic
 import os
 import sys
 from docopt import docopt
-from subprocess import getoutput
+# from subprocess import getoutput
 
 NAME = 'WhichFile'
-VERSION = '0.0.2-1'
+VERSION = '0.0.3'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
 USAGESTR = """{versionstr}
     Usage:
         {script} -h | -v
-        {script} PATH... [-D]
+        {script} PATH... [-D] [-m] [-s]
 
     Options:
         PATH          : Directory path or paths to resolve.
         -D,--debug    : Print some debugging info.
         -h,--help     : Show this help message.
+        -m,--mime     : Show mime type instead of human readable form.
+        -s,--short    : Short output, print only the target.
+                        On error nothing is printed and non-zero is returned.
         -v,--version  : Show version.
 """.format(script=SCRIPT, versionstr=VERSIONSTR)
+
+DEBUG = False
 
 
 class ResolvedPath(object):
@@ -38,7 +43,8 @@ class ResolvedPath(object):
         the file type.
     """
 
-    def __init__(self, spath):
+    def __init__(self, spath, use_mime=False):
+        self.use_mime = use_mime
         # Expand the ~ (user) path, and use an absolute path when needed.
         try:
             if '~' in spath:
@@ -132,7 +138,7 @@ class ResolvedPath(object):
         """ Determine a file's type like the `file` command. """
         path = path or self.path
         try:
-            ftype = magic.from_file(path)
+            ftype = magic.from_file(path, mime=self.use_mime)
         except OSError as ex:
             printdebug('_get_filetype: Magic error: {}\n{}'.format(path, ex))
             if self.broken:
@@ -176,8 +182,16 @@ class ResolvedPath(object):
         self.filetype = self._get_filetype(self.target)
         self.resolved = True
 
+    def print(self):
+        """ Prints str(self) if it's not an empty string. """
+        info = str(self)
+        if info:
+            print('\n{}'.format(info))
 
-DEBUG = False
+    def print_target(self):
+        """ Prints self.target if it is set. """
+        if self.target:
+            print(self.target)
 
 
 def main(argd):
@@ -188,17 +202,18 @@ def main(argd):
 
     errfiles = []
     for path in argd['PATH']:
-        resolved = ResolvedPath(path)
+        resolved = ResolvedPath(path, use_mime=argd['--mime'])
         if resolved.exists:
-            resolvedinfo = str(resolved)
-            if resolvedinfo:
-                print('\n{}'.format(resolvedinfo))
+            if argd['--short']:
+                resolved.print_target()
+            else:
+                resolved.print()
         else:
             printdebug('resolved.exists = False after resolving.')
             errfiles.append(path)
 
     errs = len(errfiles)
-    if errs:
+    if errs and (not argd['--short']):
         pathplural = 'path' if errs == 1 else 'paths'
         print('\nThere were errors resolving {} {}.'.format(errs, pathplural))
         print('    {}'.format('\n    '.join(errfiles)))
