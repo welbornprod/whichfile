@@ -105,13 +105,9 @@ class ResolvedPath(object):
             indention = ' ' * indent
             lines.append('{}-> {} {}'.format(indention, symlink, linkstatus))
             indent += 4
+
         # Indent some more for labels.
         indent += 7
-
-        # if len(self.symlink_to) > 1:
-        #    This is actually not needed at all. The arrows ( -> ) say it all.
-        #    targetlbl = '{}'.format('Target:'.rjust(indent))
-        #    lines.append('\n{} {}'.format(targetlbl, self.target))
         if self.resolved:
             typelbl = '{}'.format('Type:'.rjust(indent))
             lines.append('{} {}'.format(typelbl, self.filetype))
