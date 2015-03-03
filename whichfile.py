@@ -53,8 +53,8 @@ class ResolvedPath(object):
             Information about the path will be in the public attributes:
                 broken     : Whether this is an existing, but broken symlink.
                 exists     : Whether this is an existing path.
-                filetype   : File type from libmagic in human readable form.
-                             (mime type if use_mime is True)
+                filetype   : File type from libmagic in human readable form,
+                             or mime type if use_mime is True.
                 resolved   : Whether this path is resolved yet.
                              This will be false for non-existing paths.
                 symlink_to : List of link targets (in order).
@@ -98,7 +98,7 @@ class ResolvedPath(object):
             linkstatus = ''
             if self._broken(symlink):
                 linkstatus = '(broken)'
-            elif not self._exists(symlink):
+            elif not os.path.exists(symlink):
                 linkstatus = '(missing)'
 
             indention = ' ' * indent
@@ -120,11 +120,6 @@ class ResolvedPath(object):
         """ Determine if a path is a broken link. """
         path = path or self.path
         return os.path.islink(path) and (not os.path.exists(path))
-
-    def _exists(self, path=None):
-        """ Determine if a path exists, or is a symlink. """
-        path = path or self.path
-        return os.path.exists(path) or os.path.islink(path)
 
     def _expand(self, path):
         """ Expand user paths, and use abspath when needed.
@@ -172,8 +167,10 @@ class ResolvedPath(object):
     def _locate(self):
         """ If this is not an absolute path, it will try to locate it
             in one of the PATH dirs.
+            Returns the full absolute path on success.
+            Returns None for non-existing paths.
         """
-        if self._exists():
+        if os.path.exists(self.path):
             printdebug('_locate(\'{p}\') = {p}'.format(p=self.path))
             self.exists = True
             return self.path
@@ -183,7 +180,7 @@ class ResolvedPath(object):
         dirs = [s.strip() for s in os.environ.get('PATH', '').split(':')]
         for dirpath in dirs:
             trypath = os.path.join(dirpath, self.path)
-            if self._exists(trypath):
+            if os.path.exists(trypath):
                 printdebug('_locate(\'{}\') = {}'.format(self.path, trypath))
                 self.path = trypath
                 self.exists = True
@@ -232,7 +229,6 @@ def main(argd):
             else:
                 resolved.print()
         else:
-            printdebug('resolved.exists = False after resolving.')
             errfiles.append(path)
 
     errs = len(errfiles)
