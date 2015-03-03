@@ -31,6 +31,7 @@ USAGESTR = """{versionstr}
         -m,--mime     : Show mime type instead of human readable form.
         -s,--short    : Short output, print only the target.
                         On error nothing is printed and non-zero is returned.
+                        Broken symlinks will have 'dead:' prepended to them.
         -v,--version  : Show version.
 """.format(script=SCRIPT, versionstr=VERSIONSTR)
 
@@ -98,7 +99,7 @@ class ResolvedPath(object):
             linkstatus = ''
             if self._broken(symlink):
                 linkstatus = '(broken)'
-            elif not os.path.exists(symlink):
+            elif not self._exists(symlink):
                 linkstatus = '(missing)'
 
             indention = ' ' * indent
@@ -120,6 +121,14 @@ class ResolvedPath(object):
         """ Determine if a path is a broken link. """
         path = path or self.path
         return os.path.islink(path) and (not os.path.exists(path))
+
+    def _exists(self, path=None):
+        """ Determine whether a path exists,
+            or is at least an existing broken link.
+        """
+        # os.path.exists() returns False for existing broken links.
+        path = path or self.path
+        return os.path.islink(path) or os.path.exists(path)
 
     def _expand(self, path):
         """ Expand user paths, and use abspath when needed.
@@ -167,10 +176,10 @@ class ResolvedPath(object):
     def _locate(self):
         """ If this is not an absolute path, it will try to locate it
             in one of the PATH dirs.
-            Returns the full absolute path on success.
+            Sets self.path, and returns the full absolute path on success.
             Returns None for non-existing paths.
         """
-        if os.path.exists(self.path):
+        if self._exists(self.path):
             printdebug('_locate(\'{p}\') = {p}'.format(p=self.path))
             self.exists = True
             return self.path
@@ -180,7 +189,7 @@ class ResolvedPath(object):
         dirs = [s.strip() for s in os.environ.get('PATH', '').split(':')]
         for dirpath in dirs:
             trypath = os.path.join(dirpath, self.path)
-            if os.path.exists(trypath):
+            if self._exists(trypath):
                 printdebug('_locate(\'{}\') = {}'.format(self.path, trypath))
                 self.path = trypath
                 self.exists = True
@@ -211,7 +220,8 @@ class ResolvedPath(object):
     def print_target(self, end='\n'):
         """ Prints self.target if it is set. """
         if self.target:
-            print(self.target, end=end)
+            s = 'dead:{}'.format(self.target) if self.broken else self.target
+            print(s, end=end)
 
 
 def main(argd):
