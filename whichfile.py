@@ -43,28 +43,36 @@ class ResolvedPath(object):
         the file type.
     """
 
-    def __init__(self, spath, use_mime=False):
+    def __init__(self, path, use_mime=False):
+        """
+            Arguments:
+                path     (str)  : A str path to resolve.
+                use_mime (bool) : Use mime type instead of human readable text.
+
+            The path/link is resolved on initialization.
+            Information about the path will be in the public attributes:
+                broken     : Whether this is an existing, but broken symlink.
+                exists     : Whether this is an existing path.
+                filetype   : File type from libmagic in human readable form.
+                             (mime type if use_mime is True)
+                resolved   : Whether this path is resolved yet.
+                             This will be false for non-existing paths.
+                symlink_to : List of link targets (in order).
+                target     : Final target for this link.
+
+        """
+
         self.use_mime = use_mime
         # Expand the ~ (user) path, and use an absolute path when needed.
-        try:
-            if '~' in spath:
-                spath = spath.expanduser(spath)
-            if '..' in spath:
-                spath = spath.abspath(spath)
-            self.path = spath
-        except Exception as exabs:
-            errfmt = 'Init error (abspath/expanduser): {}\n{}'
-            printdebug(errfmt.format(exabs, exabs))
+        self.path = self._expand(path)
 
         # Determine if this is an absolute path, or locate it in $PATH.
         self.exists = False
         self._locate()
         self.broken = self._broken()
-        # Chain of symlinks that may eventually lead to the original.
+
         self.symlink_to = []
-        # The final target in a chain of symlinks, just the original path.
         self.target = self.path
-        # This is the filetype string (gathered from the `file` command.)
         self.filetype = None
 
         self.resolved = False
@@ -117,6 +125,21 @@ class ResolvedPath(object):
         """ Determine if a path exists, or is a symlink. """
         path = path or self.path
         return os.path.exists(path) or os.path.islink(path)
+
+    def _expand(self, path):
+        """ Expand user paths, and use abspath when needed.
+            Return the expanded path.
+        """
+        try:
+            if '~' in path:
+                path = path.expanduser(path)
+            if '..' in path:
+                path = path.abspath(path)
+        except Exception as exabs:
+            errfmt = 'Init error (abspath/expanduser): {}\n{}'
+            printdebug(errfmt.format(exabs, exabs))
+
+        return path
 
     def _follow_links(self, path=None):
         path = path or self.path
@@ -188,10 +211,10 @@ class ResolvedPath(object):
         if info:
             print('\n{}'.format(info))
 
-    def print_target(self):
+    def print_target(self, end='\n'):
         """ Prints self.target if it is set. """
         if self.target:
-            print(self.target)
+            print(self.target, end=end)
 
 
 def main(argd):
