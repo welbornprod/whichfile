@@ -22,6 +22,8 @@ Output:
               Type: ELF 64-bit LSB  shared object, x86-64, version 1 (SYSV), dynamically linked (uses shared libs), for GNU/Linux 2.6.24, BuildID[sha1]=2d691144f816b05319ba27679df4b847107b99d7, stripped
 ```
 
+This means that `rlogin` is a link to `slogin`, which is a link to `ssh`.
+
 Options:
 --------
 
