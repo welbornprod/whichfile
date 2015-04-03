@@ -11,11 +11,11 @@
 import magic
 import os
 import sys
+
 from docopt import docopt
-# from subprocess import getoutput
 
 NAME = 'WhichFile'
-VERSION = '0.1.0'
+VERSION = '0.1.1'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -207,7 +207,7 @@ class ResolvedPath(object):
         self.filetype = self._get_filetype(self.target)
         self.resolved = True
 
-    def print(self):
+    def print_all(self):
         """ Prints str(self) if it's not an empty string. """
         info = str(self)
         if info:
@@ -233,7 +233,7 @@ def main(argd):
             if argd['--short']:
                 resolved.print_target()
             else:
-                resolved.print()
+                resolved.print_all()
         else:
             errfiles.append(path)
 
