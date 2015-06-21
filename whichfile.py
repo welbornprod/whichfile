@@ -15,7 +15,7 @@ import sys
 from docopt import docopt
 
 NAME = 'WhichFile'
-VERSION = '0.1.1'
+VERSION = '0.1.2'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -23,9 +23,11 @@ USAGESTR = """{versionstr}
     Usage:
         {script} -h | -v
         {script} PATH... [-D] [-m] [-s]
+        {script} PATH... -d [-D] [-s]
 
     Options:
         PATH          : Directory path or paths to resolve.
+        -d,--dir      : Print the parent directory of the final target.
         -D,--debug    : Print some debugging info.
         -h,--help     : Show this help message.
         -m,--mime     : Show mime type instead of human readable form.
@@ -213,8 +215,17 @@ class ResolvedPath(object):
         if info:
             print('\n{}'.format(info))
 
+    def print_dir(self, end='\n'):
+        """ Prints the parent directory for self.target if it is set. """
+        if self.target:
+            pdir, _ = os.path.split(self.target)
+            if pdir:
+                print(pdir, end=end)
+
     def print_target(self, end='\n'):
-        """ Prints self.target if it is set. """
+        """ Prints self.target if it is set.
+            Broken links will have 'dead:' prepended to them.
+        """
         if self.target:
             s = 'dead:{}'.format(self.target) if self.broken else self.target
             print(s, end=end)
@@ -230,7 +241,9 @@ def main(argd):
     for path in argd['PATH']:
         resolved = ResolvedPath(path, use_mime=argd['--mime'])
         if resolved.exists:
-            if argd['--short']:
+            if argd['--dir']:
+                resolved.print_dir()
+            elif argd['--short']:
                 resolved.print_target()
             else:
                 resolved.print_all()
