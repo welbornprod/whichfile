@@ -8,11 +8,21 @@
     -Christopher Welborn 08-09-2014
 """
 
-import magic
 import os
 import sys
 
-from docopt import docopt
+try:
+    from docopt import docopt
+except ImportError as eximp:
+    print('\nError importing the docopt module: {}'.format(eximp))
+    print('You can install it with `pip install docopt`.\n')
+    sys.exit(1)
+try:
+    import magic
+except ImportError as eximp:
+    print('\nError importing the python-magic module: {}'.format(eximp))
+    print('You can install it with `pip install python-magic`.\n')
+    sys.exit(1)
 
 NAME = 'WhichFile'
 VERSION = '0.1.2'
