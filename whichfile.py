@@ -25,7 +25,7 @@ except ImportError as eximp:
     sys.exit(1)
 
 NAME = 'WhichFile'
-VERSION = '0.1.2'
+VERSION = '0.1.3'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -175,7 +175,7 @@ class ResolvedPath(object):
         path = path or self.path
         try:
             ftype = magic.from_file(path, mime=self.use_mime)
-        except OSError as ex:
+        except EnvironmentError as ex:
             printdebug('_get_filetype: Magic error: {}\n{}'.format(path, ex))
             if self.broken:
                 return '<broken link to: {}>'.format(path)
