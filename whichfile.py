@@ -157,12 +157,8 @@ class ResolvedPath(object):
                 printdebug('_follow_links(): abspath: {}'.format(exabs))
             else:
                 yield absolutepath
-                pathgen = self._follow_links(absolutepath)
-                try:
-                    yield from pathgen
-                except SyntaxError:
-                    for s in pathgen:
-                        yield s
+                for s in self._follow_links(absolutepath):
+                    yield s
 
     def _get_filetype(self, path=None):
         """ Determine a file's type like the `file` command. """
