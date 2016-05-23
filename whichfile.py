@@ -157,7 +157,7 @@ def main(argd):
         installable = {cmd: instr for cmd, instr in installable if instr}
         installlen = len(installable)
         print_err(
-            '\nThere were errors resolving {} {}. ({} {} installable)'.format(
+            '\nThere were errors resolving {} {}, {} {} installable.'.format(
                 errs,
                 'path' if errs == 1 else 'paths',
                 installlen,
