@@ -101,7 +101,7 @@ try:
         CommandNotFound = None
         debug('Not using CommandNotFound, apt/aptitude not found.')
 except ImportError:
-    # We just won't use this feature. See: get_cmd_packages()
+    # We just won't use this feature. See: get_install_msg()
     CommandNotFound = None
     debug('Not using CommandNotFound, module cannot be imported.')
 
@@ -153,7 +153,7 @@ def main(argd):
     errs = len(errfiles)
     if errs and (not argd['--short']):
         # Get a list of (cmd, install_instructions) where available.
-        installable = ((cmd, get_cmd_packages(cmd)) for cmd in errfiles)
+        installable = ((cmd, get_install_msg(cmd)) for cmd in errfiles)
         installable = {cmd: instr for cmd, instr in installable if instr}
         installlen = len(installable)
         print_err(
@@ -174,8 +174,8 @@ def main(argd):
     return errs
 
 
-def get_cmd_packages(cmdname, ignore_installed=True):
-    """ Use /usr/lib/command-not-found if it is installed, to find any apt
+def get_install_msg(cmdname, ignore_installed=True):
+    """ Use CommandNotFound if it is installed, to find any apt
         packages that may be available.
         Returns an empty string when no packages are found,
         and install intructions when there are packages available.
