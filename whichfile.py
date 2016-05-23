@@ -5,6 +5,8 @@
     ...Resolves symlinks to find out where a link is pointing to.
        It lists all the links along the way, not just the end point.
        It will determine the file type like the `file` command.
+       It will tell you what package a command can be found in, if it is
+       not already installed.
     -Christopher Welborn 08-09-2014
 """
 
