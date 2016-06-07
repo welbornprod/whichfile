@@ -2,23 +2,40 @@
 # -*- coding: utf-8 -*-
 
 """ whichfile.py
-    ...Resolves symlinks to find out where a link is pointing to.
-       It lists all the links along the way, not just the end point.
-       It will determine the file type like the `file` command.
-       It will tell you what package a command can be found in, if it is
-       not already installed.
+    Resolves symlinks to find out where a link is pointing to.
+    It lists all the links along the way, not just the end point.
+    It will determine the file type like the `file` command.
+    It will tell you what package a command can be found in, if it is
+    not already installed (if CommandNotFound is installed on the system).
     -Christopher Welborn 08-09-2014
 """
 
 import inspect
 import os
 import posix
+import re
 import sys
 from contextlib import suppress
 from functools import cmp_to_key
 
 # print_err and debug are used before all imports/arg-parsing.
 DEBUG = ('-D' in sys.argv) or ('--debug' in sys.argv)
+
+ALIAS_FILES = tuple(
+    s for s in (
+        os.path.expanduser('~/.bash_aliases'),
+        os.path.expanduser('~/bash.alias.sh')
+    ) if os.path.exists(s)
+)
+ALIAS_FILE = ALIAS_FILES[0] if ALIAS_FILES else None
+
+# Default colors for output.
+COLOR_ARGS = {
+    'cmd': {'fore': 'blue', 'style': 'bright'},
+    'link': {'fore': 'blue'},
+    'target': {'fore': 'lightblue'},
+    'type': {'fore': 'lightgreen'}
+}
 
 
 def debug(*args, **kwargs):
@@ -108,7 +125,7 @@ except ImportError:
     debug('Not using CommandNotFound, module cannot be imported.')
 
 NAME = 'WhichFile'
-VERSION = '0.2.0'
+VERSION = '0.3.0'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -139,7 +156,7 @@ def main(argd):
     DEBUG = argd['--debug']
     debug('Debug mode: on')
 
-    errfiles = []
+    errbins = []
     for path in argd['PATH']:
         resolved = ResolvedPath(path, use_mime=argd['--mime'])
         if resolved.exists:
@@ -150,52 +167,119 @@ def main(argd):
             else:
                 resolved.print_all()
         else:
-            errfiles.append(path)
+            errbins.append(path)
 
-    errs = len(errfiles)
-    if errs and (not argd['--short']):
-        # Get a list of (cmd, install_instructions) where available.
-        installable = ((cmd, get_install_msg(cmd)) for cmd in errfiles)
-        installable = {cmd: instr for cmd, instr in installable if instr}
-        installlen = len(installable)
-        print_err(
-            '\nThere were errors resolving {} {}, {} {} installable.'.format(
-                errs,
-                'path' if errs == 1 else 'paths',
-                installlen,
-                'is' if installlen == 1 else 'are'
-            )
-        )
-        for cmd in errfiles:
-            instr = installable.get(
-                cmd,
-                '\'{}\' is not a known program or file path.'.format(cmd)
-            )
-            print_err('\n    {}'.format(instr.replace('\n', '\n    ')))
+    # Check non-binary commands.
+    for cmdname, cmdline in get_bash_msgs(errbins).items():
+        if cmdline:
+            # Found an alias.
+            errbins.remove(cmdname)
+            print(format_bash_cmd(
+                cmdname,
+                cmdline,
+                dir_only=argd['--dir'],
+                short_mode=argd['--short']
+            ))
+
+    # Check for installable commands.
+    errs = len(errbins)
+    if errbins and (not argd['--short']):
+        errs = print_err_cmds(errbins)
 
     return errs
+
+
+def format_bash_cmd(cmdname, matchline, dir_only=False, short_mode=False):
+    """ Format a found bash alias/function line for printing. """
+    if dir_only:
+        return str(C(os.path.split(ALIAS_FILE)[0], **COLOR_ARGS['target']))
+    if short_mode:
+        return str(C(ALIAS_FILE, **COLOR_ARGS['target']))
+
+    return '\n{fname}:\n    -> {cmd}\n        -> {line}'.format(
+        fname=C(ALIAS_FILE, **COLOR_ARGS['cmd']),
+        cmd=C(cmdname, **COLOR_ARGS['target']),
+        line=C(matchline, **COLOR_ARGS['type'])
+    )
+
+
+def get_bash_msgs(cmdnames):
+    """ Look for bash aliases/functions with this name, but only if the
+        user's shell is set to bash.
+        Returns a dict of cmdnames and messages about the aliases possible
+        location on success,
+        Returns {} if the user's shell is not set to bash, or no bash alias
+        file can be found.
+        All values will be None if no commands were found in the file.
+    """
+    if not ALIAS_FILE:
+        return {}
+    elif '/bash' not in os.environ.get('SHELL', ''):
+        return {}
+    cmdpatfmt = '({})'.format(
+        '|'.join((
+            '(^alias {cmd}[ ]?)',
+            '(^function {cmd}\(?\)?$)',
+            '(^{cmd}\(\)$)'
+        ))
+    ).format
+
+    # Build a dict of {cmdname: regex_pattern} before opening the file.
+    cmdpats = {}
+    for cmd in cmdnames:
+        try:
+            cmdpat = re.compile(cmdpatfmt(cmd=cmd))
+        except re.error as ex:
+            print_err('Cannot search alias file for: {}\n{}'.format(
+                cmd,
+                ex
+            ))
+        else:
+            cmdpats[cmd] = cmdpat
+    if not cmdpats:
+        # No patterns to search for, all of them errored.
+        return {}
+    # Set all messages to None, until proven othewise.
+    cmdmsgs = {cmd: None for cmd in cmdnames}
+    with open(ALIAS_FILE, 'r') as f:
+        for line in f:
+            l = line.strip()
+            for cmdname, cmdpat in cmdpats.items():
+                if cmdpat is None:
+                    # Already found and added.
+                    continue
+                match = cmdpat.search(l)
+                if match is not None:
+                    # Found the command, add it's message, remove it from
+                    # the list of command regex patterns, and stop searching
+                    # this line for other commands.
+                    cmdpats[cmdname] = None
+                    cmdmsgs[cmdname] = l
+                    break
+
+    return cmdmsgs
 
 
 def get_install_msg(cmdname, ignore_installed=True):
     """ Use CommandNotFound if it is installed, to find any apt
         packages that may be available.
-        Returns an empty string when no packages are found,
+        Returns None when no packages are found,
         and install intructions when there are packages available.
     """
     if CommandNotFound is None:
         # Feature not enabled.
-        return ''
+        return None
     cmdname = os.path.split(cmdname)[-1]
 
     # Instantiate CommandNotFound, using default data dir.
     cnf = CommandNotFound()
     if cmdname in cnf.getBlacklist():
-        return ''
+        return None
 
     packages = cnf.getPackages(cmdname)
     pkglen = len(packages)
     if pkglen == 0:
-        return ''
+        return None
     if pkglen == 1:
         msgfmt = '\n'.join((
             'The program \'{cmd}\' is currently not installed.',
@@ -257,6 +341,34 @@ def get_install_msg(cmdname, ignore_installed=True):
             return '\n'.join(msg).format(cmd=cmdname)
 
 
+def print_err_cmds(errcmds):
+    """ Print all files that errored, with possible install suggestions.
+        Returns the number of errored files.
+    """
+    errs = len(errcmds)
+    if not errs:
+        return 0
+    # Get a list of (cmd, install_instructions) where available.
+    installable = ((cmd, get_install_msg(cmd)) for cmd in errcmds)
+    installable = {cmd: instr for cmd, instr in installable if instr}
+    installlen = len(installable)
+    print_err(
+        '\nThere were errors resolving {} {}, {} {} installable.'.format(
+            errs,
+            'path' if errs == 1 else 'paths',
+            installlen,
+            'is' if installlen == 1 else 'are'
+        )
+    )
+    for cmd in errcmds:
+        instr = installable.get(
+            cmd,
+            '\'{}\' is not a known program or file path.'.format(cmd)
+        )
+        print_err('\n    {}'.format(instr.replace('\n', '\n    ')))
+    return errs
+
+
 class ResolvedPath(object):
 
     """ Resolve a single path, following any symlinks and determining
@@ -312,15 +424,20 @@ class ResolvedPath(object):
             debug('__str__() on unresolved file.')
             return str(self.path)
 
-        lines = ['{}:'.format(self.path)]
+        lines = ['{}:'.format(C(self.path, **COLOR_ARGS['cmd']))]
         indent = 4
-        for symlink in self.symlink_to:
+        lastlink = len(self.symlink_to) - 1
+        for i, symlink in enumerate(self.symlink_to):
             linkstatus = ''
             if self._broken(symlink):
-                linkstatus = '(broken)'
+                linkstatus = C('(broken)', fore='red')
             elif not self._exists(symlink):
-                linkstatus = '(missing)'
-
+                linkstatus = C('(missing)', fore='red')
+            else:
+                symlink = C(
+                    symlink,
+                    **COLOR_ARGS['target' if i == lastlink else 'link']
+                )
             indention = ' ' * indent
             lines.append('{}-> {} {}'.format(indention, symlink, linkstatus))
             indent += 4
@@ -328,8 +445,13 @@ class ResolvedPath(object):
         # Indent some more for labels.
         indent += 7
         if self.resolved:
-            typelbl = '{}'.format('Type:'.rjust(indent))
-            lines.append('{} {}'.format(typelbl, self.filetype))
+            typelbl = 'Type:'.rjust(indent)
+            lines.append(
+                '{} {}'.format(
+                    typelbl,
+                    C(self.filetype, **COLOR_ARGS['type'])
+                )
+            )
         return '\n'.join(lines)
 
     def _broken(self, path=None):
@@ -440,17 +562,47 @@ class ResolvedPath(object):
         if self.target:
             pdir, _ = os.path.split(self.target)
             if pdir:
-                print(pdir, end=end)
+                print(C(pdir, **COLOR_ARGS['target']), end=end)
 
     def print_target(self, end='\n'):
         """ Prints self.target if it is set.
             Broken links will have 'dead:' prepended to them.
         """
         if self.target:
-            s = 'dead:{}'.format(self.target) if self.broken else self.target
-            print(s, end=end)
+            if self.broken:
+                targetstr = 'dead:{}'.format(C(self.target, fore='red'))
+            else:
+                targetstr = C(self.target, **COLOR_ARGS['target'])
+            print(targetstr, end=end)
+
+
+class InvalidArg(ValueError):
+    """ Raised when the user has used an invalid argument. """
+    def __init__(self, msg=None):
+        self.msg = msg or ''
+
+    def __str__(self):
+        if self.msg:
+            return 'Invalid argument, {}'.format(self.msg)
+        return 'Invalid argument!'
 
 
 if __name__ == '__main__':
-    mainret = main(docopt(USAGESTR, version=VERSIONSTR))
+    try:
+        mainret = main(docopt(USAGESTR, version=VERSIONSTR))
+    except InvalidArg as ex:
+        print_err(ex)
+        mainret = 1
+    except (EOFError, KeyboardInterrupt):
+        print_err('\nUser cancelled.\n', file=sys.stderr)
+        mainret = 2
+    except BrokenPipeError:
+        print_err(
+            '\nBroken pipe, input/output was interrupted.\n',
+            file=sys.stderr)
+        mainret = 3
+    except EnvironmentError as ex:
+        print_err('\n{}'.format(ex))
+        mainret = 1
+
     sys.exit(mainret)
