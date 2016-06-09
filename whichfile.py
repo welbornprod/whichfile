@@ -18,6 +18,33 @@ import sys
 from contextlib import suppress
 from functools import cmp_to_key
 
+NAME = 'WhichFile'
+VERSION = '0.3.1'
+VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
+SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
+
+USAGESTR = """{versionstr}
+    Usage:
+        {script} -h | -p | -v
+        {script} PATH...  [-c] [-D] [-m] [-s]
+        {script} PATH... -d  [-c] [-D] [-s]
+
+    Options:
+        PATH            : Directory path or paths to resolve.
+        -c,--ignorecwd  : Ignore files in the CWD, and try to locate in $PATH.
+        -d,--dir        : Print the parent directory of the final target.
+        -D,--debug      : Print some debugging info.
+        -h,--help       : Show this help message.
+        -m,--mime       : Show mime type instead of human readable form.
+        -p,--path       : List directories in $PATH, like:
+                          echo "$PATH" | tr ':' '\\n'
+        -s,--short      : Short output, print only the target.
+                          On error nothing is printed and non-zero is
+                          returned.
+                          Broken symlinks will have 'dead:' prepended to them.
+        -v,--version    : Show version.
+""".format(script=SCRIPT, versionstr=VERSIONSTR)
+
 # print_err and debug are used before all imports/arg-parsing.
 DEBUG = ('-D' in sys.argv) or ('--debug' in sys.argv)
 
@@ -78,10 +105,16 @@ def debug(*args, **kwargs):
 
 def print_err(*args, **kwargs):
     """ Print an error message to stderr. """
+
     if kwargs.get('file', None) is None:
         kwargs['file'] = sys.stderr
-    print(C(kwargs.get('sep', ' ').join(args), fore='red'), **kwargs)
-
+    nocolor = kwargs.get('nocolor', False)
+    with suppress(KeyError):
+        kwargs.pop('nocolor')
+    if nocolor:
+        print(*args, **kwargs)
+    else:
+        print(C(kwargs.get('sep', ' ').join(args), fore='red'), **kwargs)
 
 try:
     from colr import (
@@ -124,29 +157,6 @@ except ImportError:
     CommandNotFound = None
     debug('Not using CommandNotFound, module cannot be imported.')
 
-NAME = 'WhichFile'
-VERSION = '0.3.0'
-VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
-SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
-
-USAGESTR = """{versionstr}
-    Usage:
-        {script} -h | -v
-        {script} PATH... [-D] [-m] [-s]
-        {script} PATH... -d [-D] [-s]
-
-    Options:
-        PATH          : Directory path or paths to resolve.
-        -d,--dir      : Print the parent directory of the final target.
-        -D,--debug    : Print some debugging info.
-        -h,--help     : Show this help message.
-        -m,--mime     : Show mime type instead of human readable form.
-        -s,--short    : Short output, print only the target.
-                        On error nothing is printed and non-zero is returned.
-                        Broken symlinks will have 'dead:' prepended to them.
-        -v,--version  : Show version.
-""".format(script=SCRIPT, versionstr=VERSIONSTR)
-
 DEBUG = False
 
 
@@ -156,9 +166,20 @@ def main(argd):
     DEBUG = argd['--debug']
     debug('Debug mode: on')
 
+    # Quick PATH list and exit.
+    if argd['--path']:
+        paths = ResolvedPath.get_env_path()
+        print('\n'.join(paths))
+        return 0 if paths else 1
+
+    # Resolve all arguments.
     errbins = []
     for path in argd['PATH']:
-        resolved = ResolvedPath(path, use_mime=argd['--mime'])
+        resolved = ResolvedPath(
+            path,
+            use_mime=argd['--mime'],
+            ignore_cwd=argd['--ignorecwd']
+        )
         if resolved.exists:
             if argd['--dir']:
                 resolved.print_dir()
@@ -278,39 +299,53 @@ def get_install_msg(cmdname, ignore_installed=True):
 
     packages = cnf.getPackages(cmdname)
     pkglen = len(packages)
+    colr_args = {
+        'cmd': {'fore': 'blue'},
+        'installcmd': {'fore': 'green'},
+        'pkg': {'fore': 'green'},
+        'component': {'fore': 'yellow'},
+    }
     if pkglen == 0:
         return None
     if pkglen == 1:
         msgfmt = '\n'.join((
             'The program \'{cmd}\' is currently not installed.',
-            '    You can install it by typing: {sudo}apt install {pkgname}'
+            '    You can install it by typing: {installcmd}'
         ))
         if posix.geteuid() == 0:
             # User is root.
             msg = msgfmt.format(
-                cmd=cmdname,
-                sudo='',
-                pkgname=packages[0][0]
+                cmd=C(cmdname, **colr_args['cmd']),
+                installcmd=C(
+                    'apt install {}'.format(packages[0][0]),
+                    **colr_args['installcmd']
+                )
             )
         elif cnf.user_can_sudo:
             msg = msgfmt.format(
-                cmd=cmdname,
-                sudo='sudo ',
-                pkgname=packages[0][0]
+                cmd=C(cmdname, **colr_args['cmd']),
+                installcmd=C(
+                    'sudo apt install {}'.format(packages[0][0]),
+                    **colr_args['installcmd']
+                )
             )
         else:
             msg = ' '.join((
                 'To run \'{cmd}\' please ask your administrator to install',
                 'the package \'{pkg}\''
-            )).format(cmd=cmdname, pkg=packages[0][0])
+            )).format(
+                cmd=C(cmdname, **colr_args['cmd']),
+                pkg=C(packages[0][0], **colr_args['pkg'])
+            )
         if not packages[0][1] in cnf.sources_list:
             msg = '\n'.join((
                 msg,
                 'You will have to enable the component called \'{}\''.format(
-                    packages[0][1]
+                    C(packages[0][1], **colr_args['component'])
                 )
             ))
         return msg
+
     if pkglen > 1:
         # Multiple packages available.
         packages.sort(key=cmp_to_key(cnf.sortByComponent))
@@ -319,26 +354,39 @@ def get_install_msg(cmdname, ignore_installed=True):
         ]
         for package in packages:
             if package[1] in cnf.sources_list:
-                msg.append('    * {pkg}'.format(pkg=package[0]))
+                msg.append('    * {pkg}'.format(
+                    pkg=C(package[0], **colr_args['pkg'])
+                ))
             else:
                 msg.append(
                     '    * {pkg} ({extramsg} {component})'.format(
-                        pkg=package[0],
+                        pkg=C(package[0], **colr_args['pkg']),
                         extramsg='You will have to enable a component called',
-                        component=package[1]
+                        component=C(package[1], **colr_args['component'])
                     )
                 )
-        installmsg = '    Try {sudo}apt install <selected package>'
+        installmsg = '    Try {{sudo}}{}'.format(
+            C('apt install <selected package>', **colr_args['installcmd'])
+        )
         if posix.geteuid() == 0:
             msg.append(installmsg)
-            return '\n'.join(msg).format(cmd=cmdname, sudo='')
+            return '\n'.join(msg).format(
+                cmd=cmdname,
+                sudo=''
+            )
         elif cnf.user_can_sudo:
             msg.append(installmsg)
-            return '\n'.join(msg).format(cmd=cmdname, sudo='sudo ')
-        else:
-            installmsg = '    Ask your administrator to install one of them.'
-            msg.append(installmsg)
-            return '\n'.join(msg).format(cmd=cmdname)
+            return '\n'.join(msg).format(
+                cmd=cmdname,
+                sudo=C('sudo ', **colr_args['installcmd'])
+            )
+        # Multiple packages, user cannot sudo.
+        msg.append(C(
+            '    Ask your administrator to install one of them.',
+            **colr_args['installcmd']
+        ))
+
+        return '\n'.join(msg).format(cmd=C(cmdname, **colr_args['cmd']))
 
 
 def print_err_cmds(errcmds):
@@ -354,18 +402,25 @@ def print_err_cmds(errcmds):
     installlen = len(installable)
     print_err(
         '\nThere were errors resolving {} {}, {} {} installable.'.format(
-            errs,
+            C(str(errs), fore='red', style='bright'),
             'path' if errs == 1 else 'paths',
-            installlen,
-            'is' if installlen == 1 else 'are'
-        )
+            C(str(installlen), fore='green', style='bright'),
+            'is' if installlen == 1 else 'are',
+        ),
+        nocolor=True
     )
+
     for cmd in errcmds:
-        instr = installable.get(
-            cmd,
-            '\'{}\' is not a known program or file path.'.format(cmd)
+        instr = installable.get(cmd, None)
+        if instr is None:
+            instr = '\'{}\' is not a known program or file path.'.format(
+                C(cmd, fore='red')
+            )
+        print_err(
+            '\n    {}'.format(instr.replace('\n', '\n    ')),
+            nocolor=True
         )
-        print_err('\n    {}'.format(instr.replace('\n', '\n    ')))
+
     return errs
 
 
@@ -375,11 +430,13 @@ class ResolvedPath(object):
         the file type.
     """
 
-    def __init__(self, path, use_mime=False):
+    def __init__(self, path, use_mime=False, ignore_cwd=False):
         """
             Arguments:
-                path     (str)  : A str path to resolve.
-                use_mime (bool) : Use mime type, not human readable text.
+                path     (str)      : A str path to resolve.
+                use_mime (bool)     : Use mime type, not human readable text.
+                ignore_local (bool) : Ignore paths in the CWD, and search
+                                      anyway.
 
             The path/link is resolved on initialization.
             Information about the path will be in the public attributes:
@@ -400,10 +457,11 @@ class ResolvedPath(object):
 
         # Determine if this is an absolute path, or locate it in $PATH.
         self.exists = False
-        self._locate()
+        self._locate(ignore_cwd=ignore_cwd)
         self.broken = self._broken()
 
         self.symlink_to = []
+        # Assume an canonical path was passed, until proven otherwise.
         self.target = self.path
         self.filetype = None
 
@@ -516,7 +574,7 @@ class ResolvedPath(object):
 
         return ftype or '<unknown>'
 
-    def _locate(self):
+    def _locate(self, ignore_cwd=False):
         """ If this is not an absolute path, it will try to locate it
             in one of the PATH dirs.
             Sets self.path, and returns the full absolute path on success.
@@ -524,12 +582,14 @@ class ResolvedPath(object):
         """
         if self._exists(self.path):
             debug('_locate(\'{p}\') = {p}'.format(p=self.path))
-            self.exists = True
-            return self.path
+            if not ignore_cwd:
+                self.exists = True
+                return self.path
+            debug('_locate(\'{p}\'): Ignoring CWD...'.format(p=self.path))
 
-        debug('_locate(\'{}\')...'.format(self.path))
+        debug('_locate(\'{}\'): Not in CWD...'.format(self.path))
 
-        dirs = [s.strip() for s in os.environ.get('PATH', '').split(':')]
+        dirs = self.get_env_path()
         for dirpath in dirs:
             trypath = os.path.join(dirpath, self.path)
             if self._exists(trypath):
@@ -555,6 +615,15 @@ class ResolvedPath(object):
         if self.filetype == 'directory':
             self.target = os.path.abspath(self.target or self.path)
         self.resolved = True
+
+    @classmethod
+    def get_env_path(cls):
+        """ Return a tuple of dirs in $PATH. """
+        return tuple(
+            path for path in
+            (s.strip() for s in os.environ.get('PATH', '').split(':'))
+            if path
+        )
 
     def print_all(self):
         """ Prints str(self) if it's not an empty string. """
