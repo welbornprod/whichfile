@@ -505,13 +505,16 @@ class ResolvedPath(object):
         """ Determine a file's type like the `file` command. """
         path = path or self.path
         try:
-            ftype = magic.from_file(path, mime=self.use_mime)
+            ftype = magic.from_file(path, mime=self.use_mime).decode()
         except EnvironmentError as ex:
             debug('_get_filetype: Magic error: {}\n{}'.format(path, ex))
             if self.broken:
                 return '<broken link to: {}>'.format(path)
-            return '<unknown>'
-        return ftype.decode('utf-8') if ftype else '<unknown>'
+            ftype = None
+        if ftype is None and os.path.isdir(path):
+            ftype = 'directory'
+
+        return ftype or '<unknown>'
 
     def _locate(self):
         """ If this is not an absolute path, it will try to locate it
@@ -549,6 +552,8 @@ class ResolvedPath(object):
             self.target = self.symlink_to[-1]
 
         self.filetype = self._get_filetype(self.target)
+        if self.filetype == 'directory':
+            self.target = os.path.abspath(self.target or self.path)
         self.resolved = True
 
     def print_all(self):
