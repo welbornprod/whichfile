@@ -72,7 +72,6 @@ PATH = [
     os.environ.get('PATH', '').split(':')
 ]
 
-
 def debug(*args, **kwargs):
     """ Print a message only if DEBUG is truthy. """
     if not (DEBUG and args):
@@ -158,16 +157,20 @@ try:
     # or aptitude are not available (CommandNotFound LP: #394843)
     if not (os.path.exists('/usr/bin/apt') or
             os.path.exists('/usr/bin/aptitude')):
-        CommandNotFound = None
+        CommandNotFound = CNF = None
         debug('Not using CommandNotFound, apt/aptitude not found.')
+    else:
+        # Instantiate CommandNotFound, using default data dir.
+        CNF = CommandNotFound()
+
 except ImportError:
     # We just won't use this feature. See: get_install_msg()
-    CommandNotFound = None
+    CommandNotFound = CNF = None
     debug('Not using CommandNotFound, module cannot be imported.')
 
 DEBUG = False
 
-
+# ----------------------------- Main entry point -----------------------------
 def main(argd):
     """ Main entry point, expects doctopt arg dict as argd """
     global DEBUG
@@ -225,7 +228,7 @@ def format_bash_cmd(cmdname, matchline, dir_only=False, short_mode=False):
     if short_mode:
         return str(C(ALIAS_FILE, **COLOR_ARGS['target']))
 
-    return '\n{fname}:\n    -> {cmd}\n        -> {line}'.format(
+    return '\n{fname}:\n    ⯈ {cmd}\n        ⯈ {line}'.format(
         fname=C(ALIAS_FILE, **COLOR_ARGS['cmd']),
         cmd=C(cmdname, **COLOR_ARGS['target']),
         line=C(matchline, **COLOR_ARGS['type'])
@@ -347,17 +350,15 @@ def get_install_msg(cmdname, ignore_installed=True):
         Returns None when no packages are found,
         and install intructions when there are packages available.
     """
-    if CommandNotFound is None:
+    if CNF is None:
         # Feature not enabled.
         return None
     cmdname = os.path.split(cmdname)[-1]
 
-    # Instantiate CommandNotFound, using default data dir.
-    cnf = CommandNotFound()
-    if cmdname in cnf.getBlacklist():
+    if cmdname in CNF.getBlacklist():
         return None
 
-    packages = cnf.getPackages(cmdname)
+    packages = CNF.getPackages(cmdname)
     pkglen = len(packages)
     colr_args = {
         'cmd': {'fore': 'blue'},
@@ -381,7 +382,7 @@ def get_install_msg(cmdname, ignore_installed=True):
                     **colr_args['installcmd']
                 )
             )
-        elif cnf.user_can_sudo:
+        elif CNF.user_can_sudo:
             msg = msgfmt.format(
                 cmd=C(cmdname, **colr_args['cmd']),
                 installcmd=C(
@@ -397,7 +398,7 @@ def get_install_msg(cmdname, ignore_installed=True):
                 cmd=C(cmdname, **colr_args['cmd']),
                 pkg=C(packages[0][0], **colr_args['pkg'])
             )
-        if not packages[0][1] in cnf.sources_list:
+        if not packages[0][1] in CNF.sources_list:
             msg = '\n'.join((
                 msg,
                 'You will have to enable the component called \'{}\''.format(
@@ -408,12 +409,12 @@ def get_install_msg(cmdname, ignore_installed=True):
 
     if pkglen > 1:
         # Multiple packages available.
-        packages.sort(key=cmp_to_key(cnf.sortByComponent))
+        packages.sort(key=cmp_to_key(CNF.sortByComponent))
         msg = [
             'The program \'{cmd}\' can be found in the following packages:'
         ]
         for package in packages:
-            if package[1] in cnf.sources_list:
+            if package[1] in CNF.sources_list:
                 msg.append('    * {pkg}'.format(
                     pkg=C(package[0], **colr_args['pkg'])
                 ))
@@ -434,7 +435,7 @@ def get_install_msg(cmdname, ignore_installed=True):
                 cmd=cmdname,
                 sudo=''
             )
-        elif cnf.user_can_sudo:
+        elif CNF.user_can_sudo:
             msg.append(installmsg)
             return '\n'.join(msg).format(
                 cmd=cmdname,
@@ -589,7 +590,7 @@ class ResolvedPath(object):
                     **COLOR_ARGS['target' if i == lastlink else 'link']
                 )
             indention = ' ' * indent
-            lines.append('{}-> {} {}'.format(indention, symlink, linkstatus))
+            lines.append('{}⯈ {} {}'.format(indention, symlink, linkstatus))
             indent += 4
 
         # Indent some more for labels.
