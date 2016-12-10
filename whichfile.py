@@ -14,12 +14,13 @@ import inspect
 import os
 import posix
 import re
+import subprocess
 import sys
 from contextlib import suppress
 from functools import cmp_to_key
 
 NAME = 'WhichFile'
-VERSION = '0.3.1'
+VERSION = '0.3.2'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -237,10 +238,11 @@ def get_bash_msgs(cmdnames):
         return {}
     elif '/bash' not in os.environ.get('SHELL', ''):
         return {}
+    bashfuncfmt = '(^function {cmd}\(?\)?$)'
     cmdpatfmt = '({})'.format(
         '|'.join((
             '(^alias {cmd}[ ]?)',
-            '(^function {cmd}\(?\)?$)',
+            bashfuncfmt,
             '(^{cmd}\(\)$)'
         ))
     ).format
@@ -263,7 +265,8 @@ def get_bash_msgs(cmdnames):
     # Set all messages to None, until proven othewise.
     cmdmsgs = {cmd: None for cmd in cmdnames}
     with open(ALIAS_FILE, 'r') as f:
-        for line in f:
+        for i, line in enumerate(f):
+            lineno = i + 1
             l = line.strip()
             for cmdname, cmdpat in cmdpats.items():
                 if cmdpat is None:
@@ -275,10 +278,82 @@ def get_bash_msgs(cmdnames):
                     # the list of command regex patterns, and stop searching
                     # this line for other commands.
                     cmdpats[cmdname] = None
-                    cmdmsgs[cmdname] = l
+                    cmdfuncpat = re.compile(bashfuncfmt.format(cmd=cmdname))
+                    if l.startswith('alias'):
+                        # The message for this alias is it's first line.
+                        cmdmsgs[cmdname] = 'line {}: {}'.format(
+                            lineno,
+                            l
+                        )
+                    elif cmdfuncpat.search(l):
+                        # The message for this function is the output of
+                        # findfunc if available.
+                        funcdefstr = run_find_func(cmdname, ALIAS_FILE)
+                        if funcdefstr is None:
+                            # No findfunc available.
+                            cmdmsgs[cmdname] = 'line {}: {}'.format(
+                                lineno,
+                                line
+                            )
+                        else:
+                            cmdmsgs[cmdname] = 'line {}:\n{}'.format(
+                                lineno,
+                                funcdefstr
+                            )
+                    else:
+                        raise ValueError('Non alias/function found.')
                     break
 
     return cmdmsgs
+
+
+def get_cmd_location(cmdname):
+    """ Find the actual path to an executable using `which` or `command -v`.
+        Returns None if it cannot be found.
+    """
+    prev_result = get_cmd_location.results.get(cmdname, None)
+    if prev_result is not None:
+        debug('Using saved executable for {}: {}'.format(
+            cmdname,
+            prev_result
+        ))
+        return prev_result
+
+    exepath = None
+    if get_cmd_location.cmd:
+        # Use whatever exe worked last time.
+        debug('Using saved \'locator\' exe: {}'.format(get_cmd_location.cmd))
+        whichcmd = get_cmd_location.cmd[:]
+        whichcmd.append(cmdname)
+        cmds = (whichcmd, )
+    else:
+        # Try `command` and `which`, in that order.
+        cmds = (
+            ['command', '-v', cmdname],
+            ['which', cmdname],
+        )
+    for cmd in cmds:
+        try:
+            cmdoutput = subprocess.check_output(cmd).rstrip()
+        except subprocess.CalledProcessError:
+            pass
+        else:
+            if not get_cmd_location.cmd:
+                get_cmd_location.cmd = cmd[:-1]
+            exepath = cmdoutput.decode()
+            # Save this result.
+            get_cmd_location.results[cmdname] = exepath
+            debug('Using {}: {}'.format(cmd[0], exepath))
+            break
+    else:
+        debug('No executables for finding exe paths: {}'.format(
+            ', '.join(c[0] for c in cmds)
+        ))
+    return exepath
+# This function remembers it's results from previous calls.
+get_cmd_location.results = {}
+# It also remembers which 'locator' exe to use.
+get_cmd_location.cmd = None
 
 
 def get_install_msg(cmdname, ignore_installed=True):
@@ -422,6 +497,32 @@ def print_err_cmds(errcmds):
         )
 
     return errs
+
+
+def run_find_func(cmdname, filename):
+    """ Run the external `findfunc` command, if available.
+        Returns the output of findfunc on success, None on error.
+    """
+    if run_find_func.exepath is None:
+        findfuncexe = get_cmd_location('findfunc')
+        if findfuncexe is None:
+            debug('`findfunc` is not available.')
+            return None
+        run_find_func.exepath = findfuncexe
+
+    findcmd = [run_find_func.exepath, '--short', cmdname, filename]
+    output = None
+    try:
+        rawoutput = subprocess.check_output(findcmd)
+    except subprocess.CalledProcessError as ex:
+        debug('`findfunc {} {}` failed: {}'.format(cmdname, filename, ex))
+        return None
+    else:
+        output = rawoutput.decode().strip()
+    run_find_func.exepath
+    return output
+# This function remembers it's first valid findfunc exe path.
+run_find_func.exepath = None
 
 
 class ResolvedPath(object):
