@@ -52,7 +52,8 @@ DEBUG = ('-D' in sys.argv) or ('--debug' in sys.argv)
 ALIAS_FILES = tuple(
     s for s in (
         os.path.expanduser('~/.bash_aliases'),
-        os.path.expanduser('~/bash.alias.sh')
+        os.path.expanduser('~/bash.alias.sh'),
+        '/etc/.bash_aliases',
     ) if os.path.exists(s)
 )
 ALIAS_FILE = ALIAS_FILES[0] if ALIAS_FILES else None
@@ -64,6 +65,12 @@ COLOR_ARGS = {
     'target': {'fore': 'lightblue'},
     'type': {'fore': 'lightgreen'}
 }
+
+# User's PATH as a list.
+PATH = [
+    s.strip() for s in
+    os.environ.get('PATH', '').split(':')
+]
 
 
 def debug(*args, **kwargs):
@@ -235,8 +242,10 @@ def get_bash_msgs(cmdnames):
         All values will be None if no commands were found in the file.
     """
     if not ALIAS_FILE:
+        debug('No alias file to work with, cancelling.')
         return {}
     elif '/bash' not in os.environ.get('SHELL', ''):
+        debug('Not a BASH environment, cancelling.')
         return {}
     bashfuncfmt = '(^function {cmd}\(?\)?$)'
     cmdpatfmt = '({})'.format(
@@ -273,36 +282,38 @@ def get_bash_msgs(cmdnames):
                     # Already found and added.
                     continue
                 match = cmdpat.search(l)
-                if match is not None:
-                    # Found the command, add it's message, remove it from
-                    # the list of command regex patterns, and stop searching
-                    # this line for other commands.
-                    cmdpats[cmdname] = None
-                    cmdfuncpat = re.compile(bashfuncfmt.format(cmd=cmdname))
-                    if l.startswith('alias'):
-                        # The message for this alias is it's first line.
+                if match is None:
+                    continue
+
+                # Found the command, add it's message, remove it from
+                # the list of command regex patterns, and stop searching
+                # this line for other commands.
+                cmdpats[cmdname] = None
+                cmdfuncpat = re.compile(bashfuncfmt.format(cmd=cmdname))
+                if l.startswith('alias'):
+                    # The message for this alias is it's first line.
+                    cmdmsgs[cmdname] = 'line {}: {}'.format(
+                        lineno,
+                        l
+                    )
+                elif cmdfuncpat.search(l):
+                    # The message for this function is the output of
+                    # findfunc if available.
+                    funcdefstr = run_find_func(cmdname, ALIAS_FILE)
+                    if funcdefstr is None:
+                        # No findfunc available.
                         cmdmsgs[cmdname] = 'line {}: {}'.format(
                             lineno,
                             l
                         )
-                    elif cmdfuncpat.search(l):
-                        # The message for this function is the output of
-                        # findfunc if available.
-                        funcdefstr = run_find_func(cmdname, ALIAS_FILE)
-                        if funcdefstr is None:
-                            # No findfunc available.
-                            cmdmsgs[cmdname] = 'line {}: {}'.format(
-                                lineno,
-                                line
-                            )
-                        else:
-                            cmdmsgs[cmdname] = 'line {}:\n{}'.format(
-                                lineno,
-                                funcdefstr
-                            )
                     else:
-                        raise ValueError('Non alias/function found.')
-                    break
+                        cmdmsgs[cmdname] = 'line {}:\n{}'.format(
+                            lineno,
+                            funcdefstr
+                        )
+                else:
+                    raise ValueError('Non alias/function found: {}'.format(l))
+                break
 
     return cmdmsgs
 
@@ -319,41 +330,15 @@ def get_cmd_location(cmdname):
         ))
         return prev_result
 
-    exepath = None
-    if get_cmd_location.cmd:
-        # Use whatever exe worked last time.
-        debug('Using saved \'locator\' exe: {}'.format(get_cmd_location.cmd))
-        whichcmd = get_cmd_location.cmd[:]
-        whichcmd.append(cmdname)
-        cmds = (whichcmd, )
-    else:
-        # Try `command` and `which`, in that order.
-        cmds = (
-            ['command', '-v', cmdname],
-            ['which', cmdname],
-        )
-    for cmd in cmds:
-        try:
-            cmdoutput = subprocess.check_output(cmd).rstrip()
-        except subprocess.CalledProcessError:
-            pass
-        else:
-            if not get_cmd_location.cmd:
-                get_cmd_location.cmd = cmd[:-1]
-            exepath = cmdoutput.decode()
-            # Save this result.
-            get_cmd_location.results[cmdname] = exepath
-            debug('Using {}: {}'.format(cmd[0], exepath))
-            break
-    else:
-        debug('No executables for finding exe paths: {}'.format(
-            ', '.join(c[0] for c in cmds)
-        ))
-    return exepath
+    for trydir in PATH:
+        fullpath = os.path.join(trydir, cmdname)
+        if os.path.exists(fullpath):
+            get_cmd_location.results[cmdname] = fullpath
+            return fullpath
+    return None
+
 # This function remembers it's results from previous calls.
 get_cmd_location.results = {}
-# It also remembers which 'locator' exe to use.
-get_cmd_location.cmd = None
 
 
 def get_install_msg(cmdname, ignore_installed=True):
@@ -503,10 +488,14 @@ def run_find_func(cmdname, filename):
     """ Run the external `findfunc` command, if available.
         Returns the output of findfunc on success, None on error.
     """
+    if run_find_func.disabled:
+        # Already tried and failed to get the findfunc exe.
+        return None
     if run_find_func.exepath is None:
         findfuncexe = get_cmd_location('findfunc')
         if findfuncexe is None:
             debug('`findfunc` is not available.')
+            run_find_func.disabled = True
             return None
         run_find_func.exepath = findfuncexe
 
@@ -523,6 +512,8 @@ def run_find_func(cmdname, filename):
     return output
 # This function remembers it's first valid findfunc exe path.
 run_find_func.exepath = None
+# And whether it failed the first time.
+run_find_func.disabled = False
 
 
 class ResolvedPath(object):
