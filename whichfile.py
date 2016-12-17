@@ -20,30 +20,34 @@ from contextlib import suppress
 from functools import cmp_to_key
 
 NAME = 'WhichFile'
-VERSION = '0.3.2'
+VERSION = '0.4.0'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
 USAGESTR = """{versionstr}
     Usage:
         {script} -h | -p | -v
-        {script} PATH...  [-c] [-D] [-m] [-s]
-        {script} PATH... -d  [-c] [-D] [-s]
+        {script} PATH... [-b | -B] [-c] [-D] [-s]
+        {script} PATH... [-d | -m] [-c] [-D] [-s]
 
     Options:
-        PATH            : Directory path or paths to resolve.
-        -c,--ignorecwd  : Ignore files in the CWD, and try to locate in $PATH.
-        -d,--dir        : Print the parent directory of the final target.
-        -D,--debug      : Print some debugging info.
-        -h,--help       : Show this help message.
-        -m,--mime       : Show mime type instead of human readable form.
-        -p,--path       : List directories in $PATH, like:
-                          echo "$PATH" | tr ':' '\\n'
-        -s,--short      : Short output, print only the target.
-                          On error nothing is printed and non-zero is
-                          returned.
-                          Broken symlinks will have 'dead:' prepended to them.
-        -v,--version    : Show version.
+        PATH             : Directory path or paths to resolve.
+        -b,--builtins    : Only show builtins when another binary exists.
+        -B,--nobuiltins  : Don't check BASH builtins.
+        -c,--ignorecwd   : Ignore files in the CWD, and try $PATH instead.
+        -d,--dir         : Print the parent directory of the final target.
+                           This enables --nobuiltins.
+        -D,--debug       : Print some debugging info.
+        -h,--help        : Show this help message.
+        -m,--mime        : Show mime type instead of human readable form.
+                           This enables --nobuiltins.
+        -p,--path        : List directories in $PATH, like:
+                           echo "$PATH" | tr ':' '\\n'
+        -s,--short       : Short output, print only the target.
+                           On error nothing is printed and non-zero is
+                           returned.
+                           Broken symlinks will be prepended with 'dead:'.
+        -v,--version     : Show version.
 """.format(script=SCRIPT, versionstr=VERSIONSTR)
 
 # print_err and debug are used before all imports/arg-parsing.
@@ -71,6 +75,7 @@ PATH = [
     s.strip() for s in
     os.environ.get('PATH', '').split(':')
 ]
+
 
 def debug(*args, **kwargs):
     """ Print a message only if DEBUG is truthy. """
@@ -170,6 +175,7 @@ except ImportError:
 
 DEBUG = False
 
+
 # ----------------------------- Main entry point -----------------------------
 def main(argd):
     """ Main entry point, expects doctopt arg dict as argd """
@@ -183,9 +189,39 @@ def main(argd):
         print('\n'.join(paths))
         return 0 if paths else 1
 
+    no_builtins = argd['--nobuiltins'] or argd['--dir'] or argd['--mime']
+    possible_exes = argd['PATH'] if no_builtins else []
+    known_builtins = []
+    # Builtins have no directory, so --dir and --nobuiltins cancels this.
+    if not no_builtins:
+        # Check BASH builtins.
+        for cmdname in argd['PATH']:
+            bashmsg = get_bash_type(cmdname, short=False)
+            if (
+                    (not bashmsg) or
+                    (('shell' not in bashmsg) and ('alias' not in bashmsg))):
+                possible_exes.append(cmdname)
+                continue
+            known_builtins.append(cmdname)
+            if not argd['--builtins']:
+                possible_exes.append(cmdname)
+            builtinhelp = get_bash_builtin_help(cmdname)
+            print(format_bash_builtin(
+                cmdname,
+                bashmsg,
+                helpmsg=builtinhelp,
+                short_mode=argd['--short']
+            ))
+    if no_builtins:
+        debug('Skipped builtins.')
+    else:
+        debug('Known builtins: {} -> {!r}'.format(
+            len(known_builtins),
+            known_builtins
+        ))
     # Resolve all arguments.
     errbins = []
-    for path in argd['PATH']:
+    for path in possible_exes:
         resolved = ResolvedPath(
             path,
             use_mime=argd['--mime'],
@@ -201,6 +237,7 @@ def main(argd):
         else:
             errbins.append(path)
 
+    debug('Non exes: {} -> {!r}'.format(len(errbins), errbins))
     # Check non-binary commands.
     for cmdname, cmdline in get_bash_msgs(errbins).items():
         if cmdline:
@@ -213,12 +250,40 @@ def main(argd):
                 short_mode=argd['--short']
             ))
 
+    # If we found builtins earlier (and --builtins was not used), don't
+    # show them as an error.
+    for builtincmd in known_builtins:
+        try:
+            errbins.remove(builtincmd)
+        except ValueError:
+            # Happens when only the builtin was found, no exe.
+            pass
+
     # Check for installable commands.
     errs = len(errbins)
+    debug('Errors: {} -> {!r}'.format(errs, errbins))
     if errbins and (not argd['--short']):
         errs = print_err_cmds(errbins)
 
     return errs
+
+
+def format_bash_builtin(cmdname, msg, helpmsg=None, short_mode=False):
+    """ Format a found bash builtin for printing. """
+    if short_mode:
+        return str(C(msg, **COLOR_ARGS['target']))
+
+    if helpmsg:
+        return '\n{cmdname}:\n    ⯈ {msg}\n        Desc.: {helpmsg}'.format(
+            cmdname=C(cmdname, **COLOR_ARGS['cmd']),
+            msg=C(msg.replace('shell', 'BASH'), **COLOR_ARGS['target']),
+            helpmsg=C(helpmsg, **COLOR_ARGS['type'])
+        )
+
+    return '\n{cmdname}:\n    ⯈ {msg}'.format(
+        cmdname=C(cmdname, **COLOR_ARGS['cmd']),
+        msg=C(msg.replace('shell', 'BASH'), **COLOR_ARGS['type']),
+    )
 
 
 def format_bash_cmd(cmdname, matchline, dir_only=False, short_mode=False):
@@ -235,9 +300,23 @@ def format_bash_cmd(cmdname, matchline, dir_only=False, short_mode=False):
     )
 
 
+def get_bash_builtin_help(name):
+    """ Retrieve the first line of help for a bash builtin, using
+        help `name`.
+        Returns '' on error.
+    """
+    helpcmd = ['bash', '-c', 'help {}'.format(name)]
+    try:
+        rawoutput = subprocess.check_output(helpcmd, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError:
+        return ''
+    lines = rawoutput.decode().split('\n')
+    return lines[1].strip()
+
+
 def get_bash_msgs(cmdnames):
-    """ Look for bash aliases/functions with this name, but only if the
-        user's shell is set to bash.
+    """ Look for bash aliases/functions/builtins with this name, but only if
+        the user's shell is set to bash.
         Returns a dict of cmdnames and messages about the aliases possible
         location on success,
         Returns {} if the user's shell is not set to bash, or no bash alias
@@ -319,6 +398,22 @@ def get_bash_msgs(cmdnames):
                 break
 
     return cmdmsgs
+
+
+def get_bash_type(name, short=True):
+    """ Run `type name` in a BASH shell. Returns the decoded output.
+        if `short` is truthy it returns one of:
+            'alias', 'keyword', 'function', 'builtin', 'file'.
+        Always returns '' on error.
+    """
+    typeargs = 'type -t' if short else 'type'
+    typecmd = ['bash', '-c', '{} {}'.format(typeargs, name)]
+    try:
+        rawoutput = subprocess.check_output(typecmd, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as ex:
+        debug('Failed to get bash type for: {}\n{}'.format(name, ex))
+        return ''
+    return rawoutput.decode().strip()
 
 
 def get_cmd_location(cmdname):

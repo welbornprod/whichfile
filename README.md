@@ -78,18 +78,26 @@ through the `mess` package.
 
 ```
 Usage:
-    whichfile -h | -v
-    whichfile PATH... [-D] [-m] [-s]
-    whichfile PATH... -d [-D] [-s]
+    whichfile -h | -p | -v
+    whichfile PATH... [-b | -B] [-c] [-D] [-s]
+    whichfile PATH... [-d | -m] [-c] [-D] [-s]
 
 Options:
-    PATH          : Directory path or paths to resolve.
-    -d,--dir      : Print the parent directory of the final target.
-    -D,--debug    : Print some debugging info.
-    -h,--help     : Show this help message.
-    -m,--mime     : Show mime type instead of human readable form.
-    -s,--short    : Short output, print only the target.
-                    On error nothing is printed and non-zero is returned.
-                    Broken symlinks will have 'dead:' prepended to them.
-    -v,--version  : Show version.
+    PATH             : Directory path or paths to resolve.
+    -b,--builtins    : Only show builtins when another binary exists.
+    -B,--nobuiltins  : Don't check BASH builtins.
+    -c,--ignorecwd   : Ignore files in the CWD, and try $PATH instead.
+    -d,--dir         : Print the parent directory of the final target.
+                       This enables --nobuiltins.
+    -D,--debug       : Print some debugging info.
+    -h,--help        : Show this help message.
+    -m,--mime        : Show mime type instead of human readable form.
+                       This enables --nobuiltins.
+    -p,--path        : List directories in $PATH, like:
+                       echo "$PATH" | tr ':' '\n'
+    -s,--short       : Short output, print only the target.
+                       On error nothing is printed and non-zero is
+                       returned.
+                       Broken symlinks will be prepended with 'dead:'.
+    -v,--version     : Show version.
 ```
