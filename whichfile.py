@@ -10,7 +10,6 @@
     -Christopher Welborn 08-09-2014
 """
 
-import inspect
 import os
 import posix
 import re
@@ -20,7 +19,7 @@ from contextlib import suppress
 from functools import cmp_to_key
 
 NAME = 'WhichFile'
-VERSION = '0.4.0'
+VERSION = '0.4.1'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -50,7 +49,7 @@ USAGESTR = """{versionstr}
         -v,--version     : Show version.
 """.format(script=SCRIPT, versionstr=VERSIONSTR)
 
-# print_err and debug are used before all imports/arg-parsing.
+# debug is used before arg-parsing.
 DEBUG = ('-D' in sys.argv) or ('--debug' in sys.argv)
 
 ALIAS_FILES = tuple(
@@ -77,56 +76,18 @@ PATH = [
 ]
 
 
-def debug(*args, **kwargs):
-    """ Print a message only if DEBUG is truthy. """
-    if not (DEBUG and args):
-        return None
-
-    # Include parent class name when given.
-    parent = kwargs.get('parent', None)
-    with suppress(KeyError):
-        kwargs.pop('parent')
-
-    # Go back more than once when given.
-    backlevel = kwargs.get('back', 1)
-    with suppress(KeyError):
-        kwargs.pop('back')
-
-    frame = inspect.currentframe()
-    # Go back a number of frames (usually 1).
-    while backlevel > 0:
-        frame = frame.f_back
-        backlevel -= 1
-    fname = os.path.split(frame.f_code.co_filename)[-1]
-    lineno = frame.f_lineno
-    if parent:
-        func = '{}.{}'.format(parent.__class__.__name__, frame.f_code.co_name)
-    else:
-        func = frame.f_code.co_name
-
-    lineinfo = '{}:{} {}: '.format(
-        C(fname, 'yellow'),
-        C(lineno, 'blue'),
-        C().join(C(func, 'magenta'), '()').ljust(20)
+def import_err(name, ex):
+    """ Print a helpful msg when third-party imports fail. """
+    print(
+        '\n'.join((
+            'Missing third-party library: {name}',
+            'You can install it with pip: `pip install {module}`',
+            'Original error was: {ex}',
+        )).format(name=name, module=name.lower(), ex=ex),
+        file=sys.stderr
     )
-    # Patch args to stay compatible with print().
-    pargs = list(C(a, 'green').str() for a in args)
-    pargs[0] = ''.join((lineinfo, pargs[0]))
-    print(*pargs, **kwargs)
+    sys.exit(1)
 
-
-def print_err(*args, **kwargs):
-    """ Print an error message to stderr. """
-
-    if kwargs.get('file', None) is None:
-        kwargs['file'] = sys.stderr
-    nocolor = kwargs.get('nocolor', False)
-    with suppress(KeyError):
-        kwargs.pop('nocolor')
-    if nocolor:
-        print(*args, **kwargs)
-    else:
-        print(C(kwargs.get('sep', ' ').join(args), fore='red'), **kwargs)
 
 try:
     from colr import (
@@ -136,25 +97,26 @@ try:
     # Automatically disable colors when piping.
     colr_auto_disable()
 except ImportError as eximp:
-    print_err('\nError importing the colr module: {}'.format(eximp))
-    if sys.version_info.major >= 3:
-        print_err('You can install it with `pip install colr`')
-    else:
-        print_err('Colr, and this script using Python 3+.')
-    sys.exit(1)
+    import_err('Colr', eximp)
 
 try:
-    from docopt import docopt
+    from colr import docopt
 except ImportError as eximp:
-    print_err('\nError importing the docopt module: {}'.format(eximp))
-    print_err('You can install it with `pip install docopt`.\n')
-    sys.exit(1)
+    import_err('Docopt', eximp)
+
 try:
     import magic
 except ImportError as eximp:
-    print_err('\nError importing the python-magic module: {}'.format(eximp))
-    print_err('You can install it with `pip install python-magic`.\n')
-    sys.exit(1)
+    import_err('Python-Magic', eximp)
+
+try:
+    from printdebug import DebugColrPrinter
+    debugprinter = DebugColrPrinter()
+    if not DEBUG:
+        debugprinter.disable()
+    debug = debugprinter.debug
+except ImportError as eximp:
+    import_err('PrintDebug', eximp)
 
 try:
     from CommandNotFound import CommandNotFound
@@ -162,25 +124,20 @@ try:
     # or aptitude are not available (CommandNotFound LP: #394843)
     if not (os.path.exists('/usr/bin/apt') or
             os.path.exists('/usr/bin/aptitude')):
-        CommandNotFound = CNF = None
+        CommandNotFound = CNF = None  # noqa
         debug('Not using CommandNotFound, apt/aptitude not found.')
     else:
         # Instantiate CommandNotFound, using default data dir.
         CNF = CommandNotFound()
-
 except ImportError:
     # We just won't use this feature. See: get_install_msg()
     CommandNotFound = CNF = None
     debug('Not using CommandNotFound, module cannot be imported.')
 
-DEBUG = False
-
 
 # ----------------------------- Main entry point -----------------------------
 def main(argd):
     """ Main entry point, expects doctopt arg dict as argd """
-    global DEBUG
-    DEBUG = argd['--debug']
     debug('Debug mode: on')
 
     # Quick PATH list and exit.
@@ -197,9 +154,7 @@ def main(argd):
         # Check BASH builtins.
         for cmdname in argd['PATH']:
             bashmsg = get_bash_type(cmdname, short=False)
-            if (
-                    (not bashmsg) or
-                    (('shell' not in bashmsg) and ('alias' not in bashmsg))):
+            if not str_contains(bashmsg, ('alias', 'function', 'shell')):
                 possible_exes.append(cmdname)
                 continue
             known_builtins.append(cmdname)
@@ -407,13 +362,20 @@ def get_bash_type(name, short=True):
         Always returns '' on error.
     """
     typeargs = 'type -t' if short else 'type'
-    typecmd = ['bash', '-c', '{} {}'.format(typeargs, name)]
+    typecmd = [
+        'bash',
+        '-c',
+        '{} {}'.format(typeargs, name)
+    ]
     try:
         rawoutput = subprocess.check_output(typecmd, stderr=subprocess.PIPE)
     except subprocess.CalledProcessError as ex:
         debug('Failed to get bash type for: {}\n{}'.format(name, ex))
         return ''
-    return rawoutput.decode().strip()
+    output = rawoutput.decode().strip()
+    if output:
+        debug('bash -t {}: {}'.format(name, output))
+    return output
 
 
 def get_cmd_location(cmdname):
@@ -434,6 +396,7 @@ def get_cmd_location(cmdname):
             get_cmd_location.results[cmdname] = fullpath
             return fullpath
     return None
+
 
 # This function remembers it's results from previous calls.
 get_cmd_location.results = {}
@@ -545,6 +508,20 @@ def get_install_msg(cmdname, ignore_installed=True):
         return '\n'.join(msg).format(cmd=C(cmdname, **colr_args['cmd']))
 
 
+def print_err(*args, **kwargs):
+    """ Print an error message to stderr. """
+
+    if kwargs.get('file', None) is None:
+        kwargs['file'] = sys.stderr
+    nocolor = kwargs.get('nocolor', False)
+    with suppress(KeyError):
+        kwargs.pop('nocolor')
+    if nocolor:
+        print(*args, **kwargs)
+    else:
+        print(C(kwargs.get('sep', ' ').join(args), fore='red'), **kwargs)
+
+
 def print_err_cmds(errcmds):
     """ Print all files that errored, with possible install suggestions.
         Returns the number of errored files.
@@ -606,6 +583,20 @@ def run_find_func(cmdname, filename):
         output = rawoutput.decode().strip()
     run_find_func.exepath
     return output
+
+
+def str_contains(s, needles):
+    """ Run `in` test for several strings.
+        Returns True of s contains any of the strings in `needles`.
+    """
+    if not s:
+        return False
+    for needle in needles:
+        if needle in s:
+            return True
+    return False
+
+
 # This function remembers it's first valid findfunc exe path.
 run_find_func.exepath = None
 # And whether it failed the first time.
@@ -751,7 +742,7 @@ class ResolvedPath(object):
         """ Determine a file's type like the `file` command. """
         path = path or self.path
         try:
-            ftype = magic.from_file(path, mime=self.use_mime).decode()
+            ftype = magic.from_file(path, mime=self.use_mime)
         except EnvironmentError as ex:
             debug('_get_filetype: Magic error: {}\n{}'.format(path, ex))
             if self.broken:
@@ -851,7 +842,7 @@ class InvalidArg(ValueError):
 
 if __name__ == '__main__':
     try:
-        mainret = main(docopt(USAGESTR, version=VERSIONSTR))
+        mainret = main(docopt(USAGESTR, version=VERSIONSTR, script=SCRIPT))
     except InvalidArg as ex:
         print_err(ex)
         mainret = 1
