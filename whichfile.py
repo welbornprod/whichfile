@@ -792,9 +792,9 @@ class ResolvedPath(object):
 
         self.filetype = self._get_filetype(self.target)
         try:
+            # For old libmagic versions, the info will not be as good either.
             self.filetype = self.filetype.decode()
         except AttributeError:
-            # Not needed.
             pass
         if self.filetype == 'directory':
             self.target = os.path.abspath(self.target or self.path)
