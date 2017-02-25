@@ -19,7 +19,7 @@ from contextlib import suppress
 from functools import cmp_to_key
 
 NAME = 'WhichFile'
-VERSION = '0.4.1'
+VERSION = '0.4.2'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -791,6 +791,11 @@ class ResolvedPath(object):
             self.target = self.symlink_to[-1]
 
         self.filetype = self._get_filetype(self.target)
+        try:
+            self.filetype = self.filetype.decode()
+        except AttributeError:
+            # Not needed.
+            pass
         if self.filetype == 'directory':
             self.target = os.path.abspath(self.target or self.path)
         self.resolved = True
