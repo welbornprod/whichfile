@@ -616,30 +616,31 @@ run_find_func.disabled = False
 
 class CircularLink(EnvironmentError):
     """ Raised when ResolvedPath finds a circular symlink. """
-    def __init__(self, startpath, errorpath, symlink=None):
+    def __init__(self, startpath, errorpath):
         self.path = startpath
         self.errorpath = errorpath
-        if symlink is None:
-            try:
-                self.symlink = os.readlink(self.path)
-            except OSError as ex:
-                debug(
-                    'Unable to determine symlink path: {}'.format(startpath)
-                )
-                self.symlink = None
-        else:
-            self.symlink = symlink
-        self.chain = self.find_link_chain()
+        self.start = None
+        self.chain = self._find_link_chain()
 
     def __str__(self):
-        fmt = 'Circular link: {s.path}'
-        if self.symlink is not None:
-            fmt = 'Circular link: {s.path} -> {s.symlink}'
-        return fmt.format(s=self)
+        if self.chain:
+            return 'Circular link: {s.path}, at: {s.start}\n{chain}'.format(
+                s=self,
+                chain='\n'.join(
+                    '{}{}{}'.format(
+                        ' ' * i,
+                        name,
+                        ' ⭠' if name == self.start else ''
+                    )
+                    for i, name in enumerate(self.chain)
+                )
+            )
+        return 'Circular link: {s.path}'.format(s=self)
 
-    def find_link_chain(self):
-        firstdir = os.path.split(self.path)[0]
-        links = [self.path]
+    def _find_link_chain(self):
+        realpath = os.path.abspath(self.path)
+        firstdir = os.path.split(realpath)[0]
+        links = [realpath]
         while True:
             path = links[-1]
             linkdir, linkname = os.path.split(path)
@@ -647,17 +648,19 @@ class CircularLink(EnvironmentError):
                 linkdir = firstdir
             link = os.path.join(linkdir, linkname)
             try:
-                symlink = os.readlink(link)
+                symlink = os.path.abspath(os.readlink(link))
             except OSError as ex:
                 debug('Failed to find symlink for: {}\n{}'.format(
                     link,
                     ex
                 ))
+                break
             else:
                 if symlink in links:
+                    self.start = symlink
+                    links.append(self.start)
                     break
                 links.append(symlink)
-        links.append(self.path)
         return links
 
 
@@ -692,9 +695,9 @@ class ResolvedPath(object):
         # Expand the ~ (user) path, and use an absolute path when needed.
         self.path = self._expand(path)
 
-        # Set to True if `_follow_links()` or `_get_filetype()` finds a
-        # circular symlink.
-        self.circular = False
+        # Set to starting path of a circular symlink  if `_follow_links()` or
+        # `_get_filetype()` finds a circular symlink.
+        self.circular = None
         # Determine if this is an absolute path, or locate it in $PATH.
         self.exists = False
         self._locate(ignore_cwd=ignore_cwd)
@@ -729,13 +732,10 @@ class ResolvedPath(object):
         for i, symlink in enumerate(self.symlink_to):
             linkstatus = ''
             if self.circular:
-                if i == lastlink:
-                    linkstatus = ''
+                if symlink == self.circular:
+                    linkstatus = C('⭠', 'red', style='bright')
                 else:
-                    linkstatus = C(
-                        '(circular {}/{})'.format(i + 2, linklen),
-                        'red',
-                    )
+                    linkstatus = ''
             elif self._broken(symlink):
                 linkstatus = C('(broken)', fore='red')
             elif not self._exists(symlink):
@@ -802,12 +802,12 @@ class ResolvedPath(object):
                 absolutepath = os.path.abspath(absolutepath)
             except RecursionError:
                 # Circular link.
-                debug('Circular symlink: {} -> {}'.format(
-                    path,
-                    absolutepath
-                ))
-                self.circular = True
-                raise CircularLink(self.path, path, symlink)
+                # The "circle" can start anywhere in a symlink chain,
+                # so I'm using a RecursionError to detect it right now.
+                exc = CircularLink(self.path, path)
+                self.circular = exc.start
+                debug(exc)
+                raise exc
             except Exception as exabs:
                 debug('_follow_links({}): abspath: {}'.format(path, exabs))
             else:
@@ -821,10 +821,11 @@ class ResolvedPath(object):
             ftype = magic.from_file(path, mime=self.use_mime)
         except EnvironmentError as ex:
             if ex.errno == 40:
-                # Circular symlink.
+                # Circular symlink, this should already be caught in
+                # _follow_links, which is called before this in _resolve.
                 debug('_get_filetype: Magic error: {}\n{}'.format(path, ex))
-                self.circular = True
-                raise CircularLink(self.path, path, None)
+                exc = CircularLink(self.path, path)
+                self.circular = exc.start
             debug('_get_filetype: Magic error: {}\n{}'.format(path, ex))
             if self.broken:
                 return '<broken link to: {}>'.format(path)
