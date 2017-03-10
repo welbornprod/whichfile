@@ -19,7 +19,7 @@ from contextlib import suppress
 from functools import cmp_to_key
 
 NAME = 'WhichFile'
-VERSION = '0.4.2'
+VERSION = '0.5.0'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -218,8 +218,7 @@ def main(argd):
     errs = len(errbins)
     debug('Errors: {} -> {!r}'.format(errs, errbins))
     if errbins and (not argd['--short']):
-        errs = print_err_cmds(errbins)
-
+        errs = print_err_cmds(errbins, ignore_cwd=argd['--ignorecwd'])
     return errs
 
 
@@ -522,7 +521,7 @@ def print_err(*args, **kwargs):
         print(C(kwargs.get('sep', ' ').join(args), fore='red'), **kwargs)
 
 
-def print_err_cmds(errcmds):
+def print_err_cmds(errcmds, ignore_cwd=False):
     """ Print all files that errored, with possible install suggestions.
         Returns the number of errored files.
     """
@@ -549,6 +548,18 @@ def print_err_cmds(errcmds):
             instr = '\'{}\' is not a known program or file path.'.format(
                 C(cmd, fore='red')
             )
+            if ignore_cwd:
+                if os.path.exists(cmd):
+                    instr = '\n'.join((
+                        instr,
+                        'It is an existing file, but was ignored.',
+                    ))
+                elif os.path.islink(cmd):
+                    instr = '\n'.join((
+                        instr,
+                        'It is an existing symlink, but was ignored.',
+                    ))
+
         print_err(
             '\n    {}'.format(instr.replace('\n', '\n    ')),
             nocolor=True
@@ -603,6 +614,53 @@ run_find_func.exepath = None
 run_find_func.disabled = False
 
 
+class CircularLink(EnvironmentError):
+    """ Raised when ResolvedPath finds a circular symlink. """
+    def __init__(self, startpath, errorpath, symlink=None):
+        self.path = startpath
+        self.errorpath = errorpath
+        if symlink is None:
+            try:
+                self.symlink = os.readlink(self.path)
+            except OSError as ex:
+                debug(
+                    'Unable to determine symlink path: {}'.format(startpath)
+                )
+                self.symlink = None
+        else:
+            self.symlink = symlink
+        self.chain = self.find_link_chain()
+
+    def __str__(self):
+        fmt = 'Circular link: {s.path}'
+        if self.symlink is not None:
+            fmt = 'Circular link: {s.path} -> {s.symlink}'
+        return fmt.format(s=self)
+
+    def find_link_chain(self):
+        firstdir = os.path.split(self.path)[0]
+        links = [self.path]
+        while True:
+            path = links[-1]
+            linkdir, linkname = os.path.split(path)
+            if not linkdir:
+                linkdir = firstdir
+            link = os.path.join(linkdir, linkname)
+            try:
+                symlink = os.readlink(link)
+            except OSError as ex:
+                debug('Failed to find symlink for: {}\n{}'.format(
+                    link,
+                    ex
+                ))
+            else:
+                if symlink in links:
+                    break
+                links.append(symlink)
+        links.append(self.path)
+        return links
+
+
 class ResolvedPath(object):
 
     """ Resolve a single path, following any symlinks and determining
@@ -634,6 +692,9 @@ class ResolvedPath(object):
         # Expand the ~ (user) path, and use an absolute path when needed.
         self.path = self._expand(path)
 
+        # Set to True if `_follow_links()` or `_get_filetype()` finds a
+        # circular symlink.
+        self.circular = False
         # Determine if this is an absolute path, or locate it in $PATH.
         self.exists = False
         self._locate(ignore_cwd=ignore_cwd)
@@ -663,10 +724,19 @@ class ResolvedPath(object):
 
         lines = ['{}:'.format(C(self.path, **COLOR_ARGS['cmd']))]
         indent = 4
-        lastlink = len(self.symlink_to) - 1
+        linklen = len(self.symlink_to)
+        lastlink = linklen - 1
         for i, symlink in enumerate(self.symlink_to):
             linkstatus = ''
-            if self._broken(symlink):
+            if self.circular:
+                if i == lastlink:
+                    linkstatus = ''
+                else:
+                    linkstatus = C(
+                        '(circular {}/{})'.format(i + 2, linklen),
+                        'red',
+                    )
+            elif self._broken(symlink):
                 linkstatus = C('(broken)', fore='red')
             elif not self._exists(symlink):
                 linkstatus = C('(missing)', fore='red')
@@ -726,17 +796,23 @@ class ResolvedPath(object):
         except OSError as exreadlink:
             debug('_follow_links(): readlink: {}'.format(exreadlink))
         else:
+            basepath = os.path.split(path)[0]
+            absolutepath = os.path.join(basepath, symlink)
             try:
-                basepath = os.path.split(path)[0]
-                absolutepath = os.path.abspath(
-                    os.path.join(basepath, symlink)
-                )
+                absolutepath = os.path.abspath(absolutepath)
+            except RecursionError:
+                # Circular link.
+                debug('Circular symlink: {} -> {}'.format(
+                    path,
+                    absolutepath
+                ))
+                self.circular = True
+                raise CircularLink(self.path, path, symlink)
             except Exception as exabs:
-                debug('_follow_links(): abspath: {}'.format(exabs))
+                debug('_follow_links({}): abspath: {}'.format(path, exabs))
             else:
                 yield absolutepath
-                for s in self._follow_links(absolutepath):
-                    yield s
+                yield from self._follow_links(absolutepath)
 
     def _get_filetype(self, path=None):
         """ Determine a file's type like the `file` command. """
@@ -744,6 +820,11 @@ class ResolvedPath(object):
         try:
             ftype = magic.from_file(path, mime=self.use_mime)
         except EnvironmentError as ex:
+            if ex.errno == 40:
+                # Circular symlink.
+                debug('_get_filetype: Magic error: {}\n{}'.format(path, ex))
+                self.circular = True
+                raise CircularLink(self.path, path, None)
             debug('_get_filetype: Magic error: {}\n{}'.format(path, ex))
             if self.broken:
                 return '<broken link to: {}>'.format(path)
@@ -786,16 +867,25 @@ class ResolvedPath(object):
             and filling in attributes along the way.
         """
         debug('Resolving: {}'.format(self.path))
-        self.symlink_to = [p for p in self._follow_links()]
-        if self.symlink_to:
-            self.target = self.symlink_to[-1]
-
-        self.filetype = self._get_filetype(self.target)
         try:
-            # For old libmagic versions, the info will not be as good either.
-            self.filetype = self.filetype.decode()
-        except AttributeError:
-            pass
+            self.symlink_to = [p for p in self._follow_links()]
+        except CircularLink as ex:
+            self.symlink_to = ex.chain[1:]
+            symlink_len = len(self.symlink_to)
+            self.filetype = '<circular link: {} {} deep>'.format(
+                symlink_len,
+                'level' if symlink_len == 1 else 'levels',
+            )
+            self.target = self.path
+        else:
+            if self.symlink_to:
+                self.target = self.symlink_to[-1]
+            self.filetype = self._get_filetype(self.target)
+            try:
+                # For old libmagic versions, the info will not be as good.
+                self.filetype = self.filetype.decode()
+            except AttributeError:
+                pass
         if self.filetype == 'directory':
             self.target = os.path.abspath(self.target or self.path)
         self.resolved = True
@@ -819,16 +909,19 @@ class ResolvedPath(object):
         """ Prints the parent directory for self.target if it is set. """
         if self.target:
             pdir, _ = os.path.split(self.target)
-            if pdir:
+            if not pdir:
+                pdir = os.path.abspath(pdir)
                 print(C(pdir, **COLOR_ARGS['target']), end=end)
 
     def print_target(self, end='\n'):
         """ Prints self.target if it is set.
-            Broken links will have 'dead:' prepended to them.
+            Broken links will have 'dead:' prepended to them,
+            circular links will have 'circular' prepended to them.
         """
         if self.target:
             if self.broken:
-                targetstr = 'dead:{}'.format(C(self.target, fore='red'))
+                msg = 'circular' if self.circular else 'dead'
+                targetstr = '{}:{}'.format(msg, C(self.target, fore='red'))
             else:
                 targetstr = C(self.target, **COLOR_ARGS['target'])
             print(targetstr, end=end)
