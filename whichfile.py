@@ -19,7 +19,7 @@ from contextlib import suppress
 from functools import cmp_to_key
 
 NAME = 'WhichFile'
-VERSION = '0.5.0'
+VERSION = '0.5.1'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -912,7 +912,7 @@ class ResolvedPath(object):
             pdir, _ = os.path.split(self.target)
             if not pdir:
                 pdir = os.path.abspath(pdir)
-                print(C(pdir, **COLOR_ARGS['target']), end=end)
+            print(C(pdir, **COLOR_ARGS['target']), end=end)
 
     def print_target(self, end='\n'):
         """ Prints self.target if it is set.
