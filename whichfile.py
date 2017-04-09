@@ -19,15 +19,15 @@ from contextlib import suppress
 from functools import cmp_to_key
 
 NAME = 'WhichFile'
-VERSION = '0.5.1'
+VERSION = '0.6.0'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
 USAGESTR = """{versionstr}
     Usage:
         {script} -h | -p | -v
-        {script} PATH... [-b | -B] [-c] [-D] [-s]
-        {script} PATH... [-d | -m] [-c] [-D] [-s]
+        {script} PATH... [-b | -B] [-c] [-D] [-N] [-s]
+        {script} PATH... [-d | -m] [-c] [-D] [-N] [-s]
 
     Options:
         PATH             : Directory path or paths to resolve.
@@ -40,6 +40,9 @@ USAGESTR = """{versionstr}
         -h,--help        : Show this help message.
         -m,--mime        : Show mime type instead of human readable form.
                            This enables --nobuiltins.
+        -N,--debugname   : Shows bash alias/function lines that don't match
+                           a function/alias pattern, but were found in the
+                           line. This is for debugging `{script}` itself.
         -p,--path        : List directories in $PATH, like:
                            echo "$PATH" | tr ':' '\\n'
         -s,--short       : Short output, print only the target.
@@ -92,7 +95,8 @@ def import_err(name, ex):
 try:
     from colr import (
         auto_disable as colr_auto_disable,
-        Colr as C
+        Colr as C,
+        disabled as colr_disabled,
     )
     # Automatically disable colors when piping.
     colr_auto_disable()
@@ -268,7 +272,7 @@ def get_bash_builtin_help(name):
     return lines[1].strip()
 
 
-def get_bash_msgs(cmdnames):
+def get_bash_msgs(cmdnames, debug_name=False):
     """ Look for bash aliases/functions/builtins with this name, but only if
         the user's shell is set to bash.
         Returns a dict of cmdnames and messages about the aliases possible
@@ -283,7 +287,7 @@ def get_bash_msgs(cmdnames):
     elif '/bash' not in os.environ.get('SHELL', ''):
         debug('Not a BASH environment, cancelling.')
         return {}
-    bashfuncfmt = '(^function {cmd}\(?\)?$)'
+    bashfuncfmt = r'(^function {cmd}\(?\)? ?{{?$)'
     cmdpatfmt = '({})'.format(
         '|'.join((
             '(^alias {cmd}[ ]?)',
@@ -319,8 +323,14 @@ def get_bash_msgs(cmdnames):
                     continue
                 match = cmdpat.search(l)
                 if match is None:
+                    if debug_name and (cmdname in l):
+                        debug('Missed {!r} for {!r} in {!r}'.format(
+                            debug_name,
+                            cmdname,
+                            l,
+                        ))
                     continue
-
+                debug('Found alias/function: {}'.format(cmdname))
                 # Found the command, add it's message, remove it from
                 # the list of command regex patterns, and stop searching
                 # this line for other commands.
@@ -582,8 +592,12 @@ def run_find_func(cmdname, filename):
             run_find_func.disabled = True
             return None
         run_find_func.exepath = findfuncexe
-
-    findcmd = [run_find_func.exepath, '--short', cmdname, filename]
+        debug('Using `findfunc`: {}'.format(findfuncexe))
+    findcmd = [run_find_func.exepath, '--short']
+    if not colr_disabled():
+        # Force findfunc to use color output.
+        findcmd.append('--color')
+    findcmd.extend((cmdname, filename))
     output = None
     try:
         rawoutput = subprocess.check_output(findcmd)
@@ -592,8 +606,14 @@ def run_find_func(cmdname, filename):
         return None
     else:
         output = rawoutput.decode().strip()
-    run_find_func.exepath
+    debug('Got `findfunc` output for {}'.format(cmdname))
     return output
+
+
+# This function remembers it's first valid findfunc exe path.
+run_find_func.exepath = None
+# And whether it failed the first time.
+run_find_func.disabled = False
 
 
 def str_contains(s, needles):
@@ -606,12 +626,6 @@ def str_contains(s, needles):
         if needle in s:
             return True
     return False
-
-
-# This function remembers it's first valid findfunc exe path.
-run_find_func.exepath = None
-# And whether it failed the first time.
-run_find_func.disabled = False
 
 
 class CircularLink(EnvironmentError):
