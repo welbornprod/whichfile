@@ -4,7 +4,9 @@
 
 This is a combination of the `which` and `file` commands.
 It will follow symlinks, reporting each link on the way, and then use
-`libmagic` to tell you what type of file it is.
+`libmagic` to tell you what type of file it is. If you happen to be using
+`BASH`, this commands offers some of the same features as the `type` command,
+only prettier.
 
 ##### Example:
 
@@ -79,8 +81,8 @@ through the `mess` package.
 ```
 Usage:
     whichfile -h | -p | -v
-    whichfile PATH... [-b | -B] [-c] [-D] [-s]
-    whichfile PATH... [-d | -m] [-c] [-D] [-s]
+    whichfile PATH... [-b | -B] [-c] [-D] [-N] [-s]
+    whichfile PATH... [-d | -m] [-c] [-D] [-N] [-s]
 
 Options:
     PATH             : Directory path or paths to resolve.
@@ -93,6 +95,9 @@ Options:
     -h,--help        : Show this help message.
     -m,--mime        : Show mime type instead of human readable form.
                        This enables --nobuiltins.
+    -N,--debugname   : Shows bash alias/function lines that don't match
+                       a function/alias pattern, but were found in the
+                       line. This is for debugging `whichfile` itself.
     -p,--path        : List directories in $PATH, like:
                        echo "$PATH" | tr ':' '\n'
     -s,--short       : Short output, print only the target.

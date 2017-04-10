@@ -24,6 +24,10 @@ VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
 USAGESTR = """{versionstr}
+
+    Reveals the actual location and file type for a given path or command.
+    Also handles BASH builtins, aliases, and functions.
+
     Usage:
         {script} -h | -p | -v
         {script} PATH... [-b | -B] [-c] [-D] [-N] [-s]
