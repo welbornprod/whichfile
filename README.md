@@ -6,7 +6,10 @@ This is a combination of the `which` and `file` commands.
 It will follow symlinks, reporting each link on the way, and then use
 `libmagic` to tell you what type of file it is. If you happen to be using
 `BASH`, this commands offers some of the same features as the `type` command,
-only prettier.
+only prettier. Also, if [`findfunc`](https://github.com/welbornprod/findfunc)
+is installed, any bash functions will be syntax highlighted. On `apt`-based
+systems it will use the `CommandNotFound` module to show installable packages
+for missing commands.
 
 ##### Example:
 
@@ -76,7 +79,7 @@ There were errors resolving 1 path, 1 is installable.
 This means that the `mess` executable cannot be found, but is installable
 through the `mess` package.
 
-# Options:
+## Options:
 
 ```
 Usage:
@@ -106,3 +109,11 @@ Options:
                        Broken symlinks will be prepended with 'dead:'.
     -v,--version     : Show version.
 ```
+
+## Demo
+
+This is a recording of several runs, showing WhichFile's output for the
+various types it can handle. Error output was included to show how installable
+`apt` packages are handled.
+
+[![asciicast](https://asciinema.org/a/112299.png)](https://asciinema.org/a/112299)
