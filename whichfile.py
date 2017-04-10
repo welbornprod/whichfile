@@ -547,7 +547,8 @@ def print_err_cmds(errcmds, ignore_cwd=False):
     installable = {cmd: instr for cmd, instr in installable if instr}
     installlen = len(installable)
     print_err(
-        '\nThere were errors resolving {} {}, {} {} installable.'.format(
+        '\nThere {} resolving {} {}, {} {} installable.'.format(
+            'was an error' if errs == 1 else 'were errors',
             C(str(errs), fore='red', style='bright'),
             'path' if errs == 1 else 'paths',
             C(str(installlen), fore='green', style='bright'),
