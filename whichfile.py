@@ -18,8 +18,10 @@ import sys
 from contextlib import suppress
 from functools import cmp_to_key
 
+from fmtblock import FormatBlock
+
 NAME = 'WhichFile'
-VERSION = '0.6.1'
+VERSION = '0.7.1'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -30,30 +32,32 @@ USAGESTR = """{versionstr}
 
     Usage:
         {script} -h | -p | -v
-        {script} PATH... [-b | -B] [-c] [-D] [-N] [-s]
-        {script} PATH... [-d | -m] [-c] [-D] [-N] [-s]
+        {script} PATH... [-b | -B] [-c] [-C] [-D] [-N] [-s] [-w width]
+        {script} PATH... [-d | -m] [-c] [-C] [-D] [-N] [-s] [-w width]
 
     Options:
-        PATH             : Directory path or paths to resolve.
-        -b,--builtins    : Only show builtins when another binary exists.
-        -B,--nobuiltins  : Don't check BASH builtins.
-        -c,--ignorecwd   : Ignore files in the CWD, and try $PATH instead.
-        -d,--dir         : Print the parent directory of the final target.
-                           This enables --nobuiltins.
-        -D,--debug       : Print some debugging info.
-        -h,--help        : Show this help message.
-        -m,--mime        : Show mime type instead of human readable form.
-                           This enables --nobuiltins.
-        -N,--debugname   : Shows bash alias/function lines that don't match
-                           a function/alias pattern, but were found in the
-                           line. This is for debugging `{script}` itself.
-        -p,--path        : List directories in $PATH, like:
-                           echo "$PATH" | tr ':' '\\n'
-        -s,--short       : Short output, print only the target.
-                           On error nothing is printed and non-zero is
-                           returned.
-                           Broken symlinks will be prepended with 'dead:'.
-        -v,--version     : Show version.
+        PATH                : Directory path or paths to resolve.
+        -b,--builtins       : Only show builtins when another binary exists.
+        -B,--nobuiltins     : Don't check BASH builtins.
+        -c,--ignorecwd      : Ignore files in the CWD, and try $PATH instead.
+        -C,--color          : Use color, even when piping output.
+        -d,--dir            : Print the parent directory of the final target.
+                              This enables --nobuiltins.
+        -D,--debug          : Print some debugging info.
+        -h,--help           : Show this help message.
+        -m,--mime           : Show mime type instead of human readable form.
+                              This enables --nobuiltins.
+        -N,--debugname      : Shows bash alias/function lines that don't match
+                              a function/alias pattern, but were found in the
+                              line. This is for debugging `{script}` itself.
+        -p,--path           : List directories in $PATH, like:
+                              echo "$PATH" | tr ':' '\\n'
+        -s,--short          : Short output, print only the target.
+                              On error nothing is printed and non-zero is
+                              returned.
+                              Broken symlinks will be prepended with 'dead:'.
+        -v,--version        : Show version.
+        -w num,--width num  : Maximum width for type information.
 """.format(script=SCRIPT, versionstr=VERSIONSTR)
 
 # debug is used before arg-parsing.
@@ -101,6 +105,7 @@ try:
         auto_disable as colr_auto_disable,
         Colr as C,
         disabled as colr_disabled,
+        enable as colr_enable,
     )
     # Automatically disable colors when piping.
     colr_auto_disable()
@@ -135,8 +140,12 @@ try:
         CommandNotFound = CNF = None  # noqa
         debug('Not using CommandNotFound, apt/aptitude not found.')
     else:
-        # Instantiate CommandNotFound, using default data dir.
-        CNF = CommandNotFound()
+        try:
+            # Instantiate CommandNotFound, using default data dir.
+            CNF = CommandNotFound()
+        except TypeError:
+            # Python 3.6+, CommandNotFound is a module.
+            CNF = CommandNotFound.CommandNotFound()
 except ImportError:
     # We just won't use this feature. See: get_install_msg()
     CommandNotFound = CNF = None
@@ -146,8 +155,9 @@ except ImportError:
 # ----------------------------- Main entry point -----------------------------
 def main(argd):
     """ Main entry point, expects doctopt arg dict as argd """
+    if argd['--color']:
+        colr_enable()
     debug('Debug mode: on')
-
     # Quick PATH list and exit.
     if argd['--path']:
         paths = ResolvedPath.get_env_path()
@@ -182,13 +192,15 @@ def main(argd):
             len(known_builtins),
             known_builtins
         ))
+
     # Resolve all arguments.
     errbins = []
     for path in possible_exes:
         resolved = ResolvedPath(
             path,
             use_mime=argd['--mime'],
-            ignore_cwd=argd['--ignorecwd']
+            ignore_cwd=argd['--ignorecwd'],
+            max_width=parse_int(argd['--width'], default=0)
         )
         if resolved.exists:
             if argd['--dir']:
@@ -520,6 +532,18 @@ def get_install_msg(cmdname, ignore_installed=True):
 
         return '\n'.join(msg).format(cmd=C(cmdname, **colr_args['cmd']))
 
+def parse_int(s, default=None):
+    """ Parse a string as an integer, returns `default` for falsey value.
+        Raises InvalidArg with a message on invalid numbers.
+    """
+    if not s:
+        # None, or less than 1.
+        return default
+    try:
+        val = int(s)
+    except ValueError:
+        raise InvalidArg('invalid number: {}'.format(s))
+    return val
 
 def print_err(*args, **kwargs):
     """ Print an error message to stderr. """
@@ -689,13 +713,16 @@ class ResolvedPath(object):
         the file type.
     """
 
-    def __init__(self, path, use_mime=False, ignore_cwd=False):
+    def __init__(self, path, use_mime=False, ignore_cwd=False, max_width=0):
         """
             Arguments:
                 path     (str)      : A str path to resolve.
                 use_mime (bool)     : Use mime type, not human readable text.
-                ignore_local (bool) : Ignore paths in the CWD, and search
+                ignore_cwd (bool)   : Ignore paths in the CWD, and search
                                       anyway.
+                max_width (int)     : Maximum width for type string.
+                                      If not 0, type info is passed through
+                                      FormatBlock.
 
             The path/link is resolved on initialization.
             Information about the path will be in the public attributes:
@@ -713,6 +740,8 @@ class ResolvedPath(object):
         self.use_mime = use_mime
         # Expand the ~ (user) path, and use an absolute path when needed.
         self.path = self._expand(path)
+        # If set to non-zero, use as width for FormatBlock on type info.
+        self.max_width = max(max_width or 0, 0)
 
         # Set to starting path of a circular symlink  if `_follow_links()` or
         # `_get_filetype()` finds a circular symlink.
@@ -772,10 +801,19 @@ class ResolvedPath(object):
         indent += 7
         if self.resolved:
             typelbl = 'Type:'.rjust(indent)
+            if self.max_width > 0:
+                prepend=' ' * (len(typelbl) + 1)
+                typeinfo = FormatBlock(self.filetype).format(
+                    width=self.max_width,
+                    prepend=prepend,
+                    strip_first=True,
+                )
+            else:
+                typeinfo = self.filetype
             lines.append(
                 '{} {}'.format(
                     typelbl,
-                    C(self.filetype, **COLOR_ARGS['type'])
+                    C(typeinfo, **COLOR_ARGS['type'])
                 )
             )
         return '\n'.join(lines)
