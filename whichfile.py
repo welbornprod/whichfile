@@ -21,7 +21,7 @@ from functools import cmp_to_key
 from fmtblock import FormatBlock
 
 NAME = 'WhichFile'
-VERSION = '0.7.1'
+VERSION = '0.7.2'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -306,9 +306,9 @@ def get_bash_msgs(cmdnames, debug_name=False):
     bashfuncfmt = r'(^function {cmd}\(?\)? ?{{?$)'
     cmdpatfmt = '({})'.format(
         '|'.join((
-            '(^alias {cmd}[ ]?)',
+            r'(^alias {cmd}[ ]?)',
             bashfuncfmt,
-            '(^{cmd}\(\)$)'
+            r'(^{cmd}\(\)$)'
         ))
     ).format
 
@@ -332,18 +332,18 @@ def get_bash_msgs(cmdnames, debug_name=False):
     with open(ALIAS_FILE, 'r') as f:
         for i, line in enumerate(f):
             lineno = i + 1
-            l = line.strip()
+            stripped = line.strip()
             for cmdname, cmdpat in cmdpats.items():
                 if cmdpat is None:
                     # Already found and added.
                     continue
-                match = cmdpat.search(l)
+                match = cmdpat.search(stripped)
                 if match is None:
-                    if debug_name and (cmdname in l):
+                    if debug_name and (cmdname in stripped):
                         debug('Missed {!r} for {!r} in {!r}'.format(
                             debug_name,
                             cmdname,
-                            l,
+                            stripped,
                         ))
                     continue
                 debug('Found alias/function: {}'.format(cmdname))
@@ -352,13 +352,13 @@ def get_bash_msgs(cmdnames, debug_name=False):
                 # this line for other commands.
                 cmdpats[cmdname] = None
                 cmdfuncpat = re.compile(bashfuncfmt.format(cmd=cmdname))
-                if l.startswith('alias'):
+                if stripped.startswith('alias'):
                     # The message for this alias is it's first line.
                     cmdmsgs[cmdname] = 'line {}: {}'.format(
                         lineno,
-                        l
+                        stripped
                     )
-                elif cmdfuncpat.search(l):
+                elif cmdfuncpat.search(stripped):
                     # The message for this function is the output of
                     # findfunc if available.
                     funcdefstr = run_find_func(cmdname, ALIAS_FILE)
@@ -366,7 +366,7 @@ def get_bash_msgs(cmdnames, debug_name=False):
                         # No findfunc available.
                         cmdmsgs[cmdname] = 'line {}: {}'.format(
                             lineno,
-                            l
+                            stripped
                         )
                     else:
                         cmdmsgs[cmdname] = 'line {}:\n{}'.format(
@@ -374,7 +374,9 @@ def get_bash_msgs(cmdnames, debug_name=False):
                             funcdefstr
                         )
                 else:
-                    raise ValueError('Non alias/function found: {}'.format(l))
+                    raise ValueError(
+                        'Non alias/function found: {}'.format(stripped)
+                    )
                 break
 
     return cmdmsgs
@@ -441,7 +443,12 @@ def get_install_msg(cmdname, ignore_installed=True):
     if cmdname in CNF.getBlacklist():
         return None
 
-    packages = CNF.getPackages(cmdname)
+    getpkgs = getattr(CNF, 'getPackages', getattr(CNF, 'get_packages', None))
+    if getpkgs is None:
+        raise AttributeError(
+            'CommandNotFound is missing get_packages attribute!'
+        )
+    packages = getpkgs(cmdname)
     pkglen = len(packages)
     colr_args = {
         'cmd': {'fore': 'blue'},
@@ -481,7 +488,7 @@ def get_install_msg(cmdname, ignore_installed=True):
                 cmd=C(cmdname, **colr_args['cmd']),
                 pkg=C(packages[0][0], **colr_args['pkg'])
             )
-        if not packages[0][1] in CNF.sources_list:
+        if packages[0][1] and (packages[0][1] not in CNF.sources_list):
             msg = '\n'.join((
                 msg,
                 'You will have to enable the component called \'{}\''.format(
@@ -532,6 +539,7 @@ def get_install_msg(cmdname, ignore_installed=True):
 
         return '\n'.join(msg).format(cmd=C(cmdname, **colr_args['cmd']))
 
+
 def parse_int(s, default=None):
     """ Parse a string as an integer, returns `default` for falsey value.
         Raises InvalidArg with a message on invalid numbers.
@@ -544,6 +552,7 @@ def parse_int(s, default=None):
     except ValueError:
         raise InvalidArg('invalid number: {}'.format(s))
     return val
+
 
 def print_err(*args, **kwargs):
     """ Print an error message to stderr. """
@@ -802,7 +811,7 @@ class ResolvedPath(object):
         if self.resolved:
             typelbl = 'Type:'.rjust(indent)
             if self.max_width > 0:
-                prepend=' ' * (len(typelbl) + 1)
+                prepend = ' ' * (len(typelbl) + 1)
                 typeinfo = FormatBlock(self.filetype).format(
                     width=self.max_width,
                     prepend=prepend,
