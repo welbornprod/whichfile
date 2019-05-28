@@ -21,7 +21,7 @@ from functools import cmp_to_key
 from fmtblock import FormatBlock
 
 NAME = 'WhichFile'
-VERSION = '0.7.2'
+VERSION = '0.7.3'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -306,7 +306,7 @@ def get_bash_msgs(cmdnames, debug_name=False):
     bashfuncfmt = r'(^function {cmd}\(?\)? ?{{?$)'
     cmdpatfmt = '({})'.format(
         '|'.join((
-            r'(^alias {cmd}[ ]?)',
+            r'(^alias {cmd}=)',
             bashfuncfmt,
             r'(^{cmd}\(\)$)'
         ))
