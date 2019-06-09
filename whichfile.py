@@ -761,10 +761,6 @@ class ResolvedName(object):
         self.max_width = max(max_width or 0, 0)
         self.ignore_cwd = ignore_cwd or False
 
-        self.is_alias = False
-        self.is_function = False
-        self.is_builtin = False
-        self.is_exe = False
         self.names = names
         self.targets = self._locate()
 
@@ -773,9 +769,17 @@ class ResolvedName(object):
         for name, nameinfo in self.targets.items():
             targetlines.append('    {!r}: {{'.format(name))
             for typename, typeinfo in nameinfo.items():
-                targetlines.append('            {!r}: {!r},'.format(
+                typerepr = repr(typeinfo)
+                reprlines = []
+                for line in typerepr.split('\n'):
+                    if line.startswith('    ') or line.startswith(')'):
+                        reprlines.append('            {}'.format(line))
+                    else:
+                        reprlines.append(line)
+                reprstr = '\n'.join(reprlines)
+                targetlines.append('            {!r}: {},'.format(
                     typename,
-                    typeinfo,
+                    reprstr,
                 ))
             targetlines.append('        },')
         targetstr = '\n'.join(targetlines)
@@ -788,6 +792,7 @@ class ResolvedName(object):
                 ',\n        '.join(repr(s) for s in self.names)
             ),
             '    targets={{\n    {}\n    }},'.format(targetstr),
+            ')',
         ))
 
     def _locate(self):
@@ -797,7 +802,13 @@ class ResolvedName(object):
         # Check aliases/functions.
         for name, typeinfo in get_bash_msgs(self.names).items():
             targets.setdefault(name, {})
-            targets[name]['alias'] = Alias(ALIAS_FILE, name, typeinfo)
+            if ': alias' in typeinfo:
+                cls = Alias
+                typename = 'alias'
+            else:
+                cls = Function
+                typename = 'function'
+            targets[name][typename] = cls(ALIAS_FILE, name, typeinfo)
 
         # Check bash builtins.
         for name in self.names:
@@ -805,6 +816,18 @@ class ResolvedName(object):
             if bashtype:
                 targets.setdefault(name, {})
                 targets[name]['builtin'] = Builtin(name, bashtype)
+
+        # Check file paths.
+        for name in self.names:
+            r = ResolvedPath(
+                name,
+                use_mime=self.use_mime,
+                ignore_cwd=self.ignore_cwd,
+                max_width=self.max_width,
+            )
+            if r.exists:
+                targets.setdefault(name, {})
+                targets[name]['file'] = r
         return targets
 
 
@@ -916,8 +939,32 @@ class ResolvedPath(object):
             self._resolve()
 
     def __repr__(self):
-        """ Same as __str__() """
-        return self.__str__()
+        """ Print a correct representation of this class instance. """
+        if self.symlink_to:
+            symlinks = '[\n    {}\n    ],'.format(
+                ',\n        '.join(
+                    repr(s) for s in self.symlink_to,
+                )
+            )
+        else:
+            symlinks = '[],'
+        return '\n'.join((
+            '{}('.format(type(self).__name__),
+            '    path={s.path!r},',
+            '    use_mime={s.use_mime},',
+            '    max_width={s.max_width},',
+            '    circular={s.circular!r},',
+            '    exists={s.exists},',
+            '    broken={s.broken},',
+            '    symlink_to={symlinks},',
+            '    target={s.target!r},',
+            '    filetype={s.filetype!r},',
+            '    resolved={s.resolved},',
+            ')',
+        )).format(
+            s=self,
+            symlinks=symlinks,
+        )
 
     def __str__(self):
         """ Printable string representation of this resolved path. """
