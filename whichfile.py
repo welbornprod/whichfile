@@ -21,7 +21,7 @@ from functools import cmp_to_key
 from fmtblock import FormatBlock
 
 NAME = 'WhichFile'
-VERSION = '0.7.3'
+VERSION = '0.7.4'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -32,11 +32,12 @@ USAGESTR = """{versionstr}
 
     Usage:
         {script} -h | -p | -v
-        {script} PATH... [-b | -B] [-c] [-C] [-D] [-N] [-s] [-w width]
+        {script} PATH... [-a | -b | -B] [-c] [-C] [-D] [-N] [-s] [-w width]
         {script} PATH... [-d | -m] [-c] [-C] [-D] [-N] [-s] [-w width]
 
     Options:
         PATH                : Directory path or paths to resolve.
+        -a,--aliases        : Check for aliases only.
         -b,--builtins       : Only show builtins when another binary exists.
         -B,--nobuiltins     : Don't check BASH builtins.
         -c,--ignorecwd      : Ignore files in the CWD, and try $PATH instead.
@@ -164,7 +165,16 @@ def main(argd):
         print('\n'.join(paths))
         return 0 if paths else 1
 
-    no_builtins = argd['--nobuiltins'] or argd['--dir'] or argd['--mime']
+    ##########################################################################
+    print(repr(ResolvedName(argd['PATH'])))
+    return 1
+    ##########################################################################
+
+    no_builtins = (
+        argd['--nobuiltins'] or
+        argd['--dir'] or
+        argd['--mime']
+    )
     possible_exes = argd['PATH'] if no_builtins else []
     known_builtins = []
     # Builtins have no directory, so --dir and --nobuiltins cancels this.
@@ -188,36 +198,19 @@ def main(argd):
     if no_builtins:
         debug('Skipped builtins.')
     else:
-        debug('Known builtins: {} -> {!r}'.format(
+        debug('Known builtins ({}): {!r}'.format(
             len(known_builtins),
             known_builtins
         ))
-
-    # Resolve all arguments.
-    errbins = []
-    for path in possible_exes:
-        resolved = ResolvedPath(
-            path,
-            use_mime=argd['--mime'],
-            ignore_cwd=argd['--ignorecwd'],
-            max_width=parse_int(argd['--width'], default=0)
-        )
-        if resolved.exists:
-            if argd['--dir']:
-                resolved.print_dir()
-            elif argd['--short']:
-                resolved.print_target()
-            else:
-                resolved.print_all()
-        else:
-            errbins.append(path)
-
-    debug('Non exes: {} -> {!r}'.format(len(errbins), errbins))
+    if argd['--aliases']:
+        notresolved = argd['PATH']
+    else:
+        notresolved = []
     # Check non-binary commands.
-    for cmdname, cmdline in get_bash_msgs(errbins).items():
+    for cmdname, cmdline in get_bash_msgs(notresolved).items():
         if cmdline:
             # Found an alias.
-            errbins.remove(cmdname)
+            notresolved.remove(cmdname)
             print(format_bash_cmd(
                 cmdname,
                 cmdline,
@@ -225,20 +218,56 @@ def main(argd):
                 short_mode=argd['--short']
             ))
 
+    if argd['--aliases']:
+        debug('Skipping ResolvedPath for --aliases.')
+    else:
+        # Resolve all arguments.
+        notresolved = []
+        for path in possible_exes:
+            resolved = ResolvedPath(
+                path,
+                use_mime=argd['--mime'],
+                ignore_cwd=argd['--ignorecwd'],
+                max_width=parse_int(argd['--width'], default=0)
+            )
+            if resolved.exists:
+                if argd['--dir']:
+                    resolved.print_dir()
+                elif argd['--short']:
+                    resolved.print_target()
+                else:
+                    resolved.print_all()
+            else:
+                notresolved.append(path)
+        debug('Non exes: {} -> {!r}'.format(len(notresolved), notresolved))
+
     # If we found builtins earlier (and --builtins was not used), don't
     # show them as an error.
     for builtincmd in known_builtins:
         try:
-            errbins.remove(builtincmd)
+            notresolved.remove(builtincmd)
         except ValueError:
             # Happens when only the builtin was found, no exe.
             pass
 
     # Check for installable commands.
-    errs = len(errbins)
-    debug('Errors: {} -> {!r}'.format(errs, errbins))
-    if errbins and (not argd['--short']):
-        errs = print_err_cmds(errbins, ignore_cwd=argd['--ignorecwd'])
+    errs = len(notresolved)
+    debug('Errors ({}): {!r}'.format(errs, notresolved))
+    if notresolved:
+        if not argd['--short']:
+            if argd['--aliases']:
+                print(C('\n').join(
+                    C('Not a valid alias', 'red')(':'),
+                    '    {}'.format(C('\n    ').join(
+                        C(name, 'blue')
+                        for name in notresolved
+                    ))
+                ))
+            else:
+                errs = print_err_cmds(
+                    notresolved,
+                    ignore_cwd=argd['--ignorecwd'],
+                )
     return errs
 
 
@@ -300,7 +329,7 @@ def get_bash_msgs(cmdnames, debug_name=False):
     if not ALIAS_FILE:
         debug('No alias file to work with, cancelling.')
         return {}
-    elif '/bash' not in os.environ.get('SHELL', ''):
+    elif 'bash' not in os.environ.get('SHELL', ''):
         debug('Not a BASH environment, cancelling.')
         return {}
     bashfuncfmt = r'(^function {cmd}\(?\)? ?{{?$)'
@@ -401,7 +430,7 @@ def get_bash_type(name, short=True):
         return ''
     output = rawoutput.decode().strip()
     if output:
-        debug('bash -t {}: {}'.format(name, output))
+        debug('{}: {}'.format(' '.join(typecmd), output))
     return output
 
 
@@ -716,10 +745,127 @@ class CircularLink(EnvironmentError):
         return links
 
 
+class ResolvedName(object):
+    """ Resolve a command/function/alias name as it would be interpreted
+        in the console.
+    """
+    def __init__(self, names, use_mime=False, ignore_cwd=False, max_width=0):
+        """
+            Arguments:
+                names (list(str)) : A list of str names to resolve.
+                use_mime (bool)   : Use mime type for file paths.
+                ignore_cwd (bool) : Ignore paths in CWD, and use search.
+                max_width (int)   : Maximum width for `type` string.
+        """
+        self.use_mime = use_mime or False
+        self.max_width = max(max_width or 0, 0)
+        self.ignore_cwd = ignore_cwd or False
+
+        self.is_alias = False
+        self.is_function = False
+        self.is_builtin = False
+        self.is_exe = False
+        self.names = names
+        self.targets = self._locate()
+
+    def __repr__(self):
+        targetlines = []
+        for name, nameinfo in self.targets.items():
+            targetlines.append('    {!r}: {{'.format(name))
+            for typename, typeinfo in nameinfo.items():
+                targetlines.append('            {!r}: {!r},'.format(
+                    typename,
+                    typeinfo,
+                ))
+            targetlines.append('        },')
+        targetstr = '\n'.join(targetlines)
+        return '\n'.join((
+            '{}('.format(type(self).__name__),
+            '    use_mime={s.use_mime},'.format(s=self),
+            '    ignore_cwd={s.ignore_cwd},'.format(s=self),
+            '    max_width={s.max_width},'.format(s=self),
+            '    names=[\n        {},\n    ],'.format(
+                ',\n        '.join(repr(s) for s in self.names)
+            ),
+            '    targets={{\n    {}\n    }},'.format(targetstr),
+        ))
+
+    def _locate(self):
+        """ Resolve this name to an alias, function, builtin, or file path.
+        """
+        targets = {}
+        # Check aliases/functions.
+        for name, typeinfo in get_bash_msgs(self.names).items():
+            targets.setdefault(name, {})
+            targets[name]['alias'] = Alias(ALIAS_FILE, name, typeinfo)
+
+        # Check bash builtins.
+        for name in self.names:
+            bashtype = get_bash_type(name, short=False)
+            if bashtype:
+                targets.setdefault(name, {})
+                targets[name]['builtin'] = Builtin(name, bashtype)
+        return targets
+
+
+class Alias(object):
+    """ Holds info about a resolved alias. """
+    def __init__(self, filepath, name, typeinfo):
+        self.filepath = filepath
+        self.name = name
+        self.info = typeinfo
+
+    def __repr__(self):
+        return '{}(filepath={!r}, name={!r}, info={!r})'.format(
+            type(self).__name__,
+            self.filepath,
+            self.name,
+            self.info,
+        )
+
+
+class Builtin(Alias):
+    """ Holds info about a resolved bash builtin. """
+    def __init__(self, name, typestr):
+        self.filepath = None
+        self.name = name
+        self.info = typestr
+        # It's possible for builtin_type to stay None, if the name isn't found.
+        self.builtin_type = None
+        for s in ('builtin', 'keyword', 'alias', 'function'):
+            if s in typestr:
+                self.builtin_type = s
+                break
+        else:
+            if ' is ' in typestr:
+                self.builtin_type = 'file'
+                self.filepath = '{}'.format(typestr.rpartition('is ')[-1])
+
+    def __repr__(self):
+        return ' '.join((
+            '{}(filepath={!r},',
+            'name={!r},',
+            'info={!r},',
+            'builtin_type={!r})',
+        )).format(
+            type(self).__name__,
+            self.filepath,
+            self.name,
+            self.info,
+            self.builtin_type,
+        )
+
+
+class Function(Alias):
+    """ Holds info about a resolved function. """
+    pass
+
+
 class ResolvedPath(object):
 
     """ Resolve a single path, following any symlinks and determining
-        the file type.
+        the file type. This is for file paths only, not aliases or bash
+        builtins.
     """
 
     def __init__(self, path, use_mime=False, ignore_cwd=False, max_width=0):
