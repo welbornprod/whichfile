@@ -18,8 +18,6 @@ import sys
 from contextlib import suppress
 from functools import cmp_to_key
 
-from fmtblock import FormatBlock
-
 NAME = 'WhichFile'
 VERSION = '0.7.4'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
@@ -32,14 +30,13 @@ USAGESTR = """{versionstr}
 
     Usage:
         {script} -h | -p | -v
-        {script} PATH... [-a | -b | -B] [-c] [-C] [-D] [-N] [-s] [-w width]
+        {script} PATH... [-a | -B] [-c] [-C] [-D] [-N] [-s] [-w width]
         {script} PATH... [-d | -m] [-c] [-C] [-D] [-N] [-s] [-w width]
 
     Options:
         PATH                : Directory path or paths to resolve.
         -a,--all            : Show all aliases, functions, builtins, and
                               file paths that were found.
-        -b,--builtins       : Only show builtins when another binary exists.
         -B,--nobuiltins     : Don't check BASH builtins.
         -c,--ignorecwd      : Ignore files in the CWD, and try $PATH instead.
         -C,--color          : Use color, even when piping output.
@@ -60,6 +57,7 @@ USAGESTR = """{versionstr}
                               Broken symlinks will be prepended with 'dead:'.
         -v,--version        : Show version.
         -w num,--width num  : Maximum width for type information.
+                              Default: <terminal_width>
 """.format(script=SCRIPT, versionstr=VERSIONSTR)
 
 # debug is used before arg-parsing.
@@ -108,6 +106,7 @@ try:
         Colr as C,
         disabled as colr_disabled,
         enable as colr_enable,
+        get_terminal_size,
     )
     # Automatically disable colors when piping.
     colr_auto_disable()
@@ -118,6 +117,11 @@ try:
     from colr import docopt
 except ImportError as eximp:
     import_err('Docopt', eximp)
+
+try:
+    from fmtblock import FormatBlock
+except ImportError as eximp:
+    import_err('FormatBlock', eximp)
 
 try:
     import magic
@@ -166,148 +170,26 @@ def main(argd):
         print('\n'.join(paths))
         return 0 if paths else 1
 
-    ##########################################################################
-    print(ResolvedName(argd['PATH']).formatted(
+    resolved = ResolvedNames(
+        argd['PATH'],
+        ignore_cwd=argd['--ignorecwd'],
+        use_mime=argd['--mime'],
+        max_width=parse_int(argd['--width'], default=get_terminal_size()[0]),
+    )
+    print(resolved.formatted(
         all_types=argd['--all'],
         dir_only=argd['--dir'],
         no_builtins=argd['--nobuiltins'] or argd['--dir'] or argd['--mime'],
-        shadow_builtins=argd['--builtins'],
         short_mode=argd['--short'],
     ))
-    return 1
-    ##########################################################################
-
-    no_builtins = (
-        argd['--nobuiltins'] or
-        argd['--dir'] or
-        argd['--mime']
-    )
-    possible_exes = argd['PATH'] if no_builtins else []
-    known_builtins = []
-    # Builtins have no directory, so --dir and --nobuiltins cancels this.
-    if not no_builtins:
-        # Check BASH builtins.
-        for cmdname in argd['PATH']:
-            bashmsg = get_bash_type(cmdname, short=False)
-            if not str_contains(bashmsg, ('alias', 'function', 'shell')):
-                possible_exes.append(cmdname)
-                continue
-            known_builtins.append(cmdname)
-            if not argd['--builtins']:
-                possible_exes.append(cmdname)
-            builtinhelp = get_bash_builtin_help(cmdname)
-            print(format_bash_builtin(
-                cmdname,
-                bashmsg,
-                helpmsg=builtinhelp,
-                short_mode=argd['--short']
-            ))
-    if no_builtins:
-        debug('Skipped builtins.')
-    else:
-        debug('Known builtins ({}): {!r}'.format(
-            len(known_builtins),
-            known_builtins
-        ))
-    if argd['--aliases']:
-        notresolved = argd['PATH']
-    else:
-        notresolved = []
-    # Check non-binary commands.
-    for cmdname, cmdline in get_bash_msgs(notresolved).items():
-        if cmdline:
-            # Found an alias.
-            notresolved.remove(cmdname)
-            print(format_bash_cmd(
-                cmdname,
-                cmdline,
-                dir_only=argd['--dir'],
-                short_mode=argd['--short']
-            ))
-
-    if argd['--aliases']:
-        debug('Skipping ResolvedPath for --aliases.')
-    else:
-        # Resolve all arguments.
-        notresolved = []
-        for path in possible_exes:
-            resolved = ResolvedPath(
-                path,
-                use_mime=argd['--mime'],
-                ignore_cwd=argd['--ignorecwd'],
-                max_width=parse_int(argd['--width'], default=0)
-            )
-            if resolved.exists:
-                if argd['--dir']:
-                    resolved.print_dir()
-                elif argd['--short']:
-                    resolved.print_target()
-                else:
-                    resolved.print_all()
-            else:
-                notresolved.append(path)
-        debug('Non exes: {} -> {!r}'.format(len(notresolved), notresolved))
-
-    # If we found builtins earlier (and --builtins was not used), don't
-    # show them as an error.
-    for builtincmd in known_builtins:
-        try:
-            notresolved.remove(builtincmd)
-        except ValueError:
-            # Happens when only the builtin was found, no exe.
-            pass
-
-    # Check for installable commands.
-    errs = len(notresolved)
-    debug('Errors ({}): {!r}'.format(errs, notresolved))
-    if notresolved:
-        if not argd['--short']:
-            if argd['--aliases']:
-                print(C('\n').join(
-                    C('Not a valid alias', 'red')(':'),
-                    '    {}'.format(C('\n    ').join(
-                        C(name, 'blue')
-                        for name in notresolved
-                    ))
-                ))
-            else:
-                errs = print_err_cmds(
-                    notresolved,
-                    ignore_cwd=argd['--ignorecwd'],
-                )
-    return errs
-
-
-def format_bash_builtin(cmdname, msg, helpmsg=None, short_mode=False):
-    """ Format a found bash builtin for printing. """
-    if short_mode:
-        return str(C(msg, **COLOR_ARGS['target']))
-
-    if helpmsg:
-        return '\n{cmdname}:\n    ⯈ {msg}\n        Desc.: {helpmsg}'.format(
-            cmdname=C(cmdname, **COLOR_ARGS['cmd']),
-            msg=C(msg.replace('shell', 'BASH'), **COLOR_ARGS['target']),
-            helpmsg=C(helpmsg, **COLOR_ARGS['type'])
+    errs = len(resolved.unresolved)
+    if errs and (not argd['--short']):
+        errs = print_err_cmds(
+            resolved.unresolved,
+            ignore_cwd=argd['--ignorecwd'],
         )
-
-    return '\n{cmdname}:\n    ⯈ {msg}'.format(
-        cmdname=C(cmdname, **COLOR_ARGS['cmd']),
-        msg=C(msg.replace('shell', 'BASH'), **COLOR_ARGS['type']),
-    )
-
-
-def format_bash_cmd(cmdname, matchline, dir_only=False, short_mode=False):
-    """ Format a found bash alias/function line for printing. """
-    if dir_only:
-        return str(C(os.path.split(ALIAS_FILE)[0], **COLOR_ARGS['target']))
-    if short_mode:
-        return str(C(ALIAS_FILE, **COLOR_ARGS['target']))
-
-    return '\n{fname}:\n    ⯈ {cmd}\n        ⯈ {line}'.format(
-        fname=C(ALIAS_FILE, **COLOR_ARGS['cmd']),
-        cmd=C(cmdname, **COLOR_ARGS['target']),
-        line=C(matchline, **COLOR_ARGS['type'])
-    )
+    debug('Errors ({}): {!r}'.format(errs, resolved.unresolved))
+    return errs
 
 
 def get_bash_builtin_help(name):
@@ -850,7 +732,7 @@ class Function(Alias):
     pass
 
 
-class ResolvedName(object):
+class ResolvedNames(object):
     """ Resolve a command/function/alias name as it would be interpreted
         in the console.
     """
@@ -867,6 +749,7 @@ class ResolvedName(object):
         self.ignore_cwd = ignore_cwd or False
 
         self.names = names
+        self.unresolved = []
         self.targets = self._locate()
 
     def __repr__(self):
@@ -909,6 +792,7 @@ class ResolvedName(object):
             if typeinfo is None:
                 # No alias/function info for this name.
                 continue
+            debug('Got bash alias/function info for: {!r}'.format(name))
             targets.setdefault(name, {})
             if ': alias' in typeinfo:
                 cls = Alias
@@ -922,6 +806,7 @@ class ResolvedName(object):
         for name in self.names:
             bashtype = get_bash_type(name, short=False)
             if bashtype:
+                debug('Got bash builtin info for: {!r}'.format(name))
                 targets.setdefault(name, {})
                 targets[name]['builtin'] = Builtin(name, bashtype)
 
@@ -934,18 +819,27 @@ class ResolvedName(object):
                 max_width=self.max_width,
             )
             if r.exists:
+                debug('Got file path info for: {!r}'.format(name))
                 targets.setdefault(name, {})
                 targets[name]['file'] = r
+            # If no info was set by now, it's unresolved.
+            if not targets.get(name, None):
+                debug('Unresolved: {!r}'.format(name))
+                self.unresolved.append(name)
         return targets
 
     def formatted(
             self, all_types=False, dir_only=False,
-            no_builtins=False, shadow_builtins=True, short_mode=False):
-        """ Printable/colorized representation of this ResolvedName. """
+            no_builtins=False, short_mode=False):
+        """ Printable/colorized representation of this ResolvedNames. """
         alltargets = []
         for name, nameinfo in self.targets.items():
             if all_types:
-                alltargets.extend(nameinfo.values())
+                alltargets.extend(
+                    r
+                    for r in nameinfo.values()
+                    if getattr(r, 'builtin_type', '') != 'file'
+                )
                 # No precedence selection, just show all of them.
                 continue
             alias = nameinfo.get('alias', nameinfo.get('function', None))
@@ -954,18 +848,22 @@ class ResolvedName(object):
             if builtin and builtin.builtin_type == 'file':
                 builtin = None
             resolved = nameinfo.get('file', None)
-            if (not shadow_builtins) and resolved:
-                # Only show builtins when there is another binary.
-                shadow_builtins = True
             if alias:
                 # Prefer aliases.
                 alltargets.append(alias)
-            elif (not no_builtins) and shadow_builtins and builtin:
+            elif (not no_builtins) and builtin:
                 # A real builtin, it will be used before any file/link.
                 alltargets.append(builtin)
             elif resolved:
                 # Just a file path (possibly a symlink).
                 alltargets.append(resolved)
+            else:
+                # Unhandled case.
+                print_err('\nUnhandled case in whichfile!:')
+                print_err('    alias: {!r}'.format(alias))
+                print_err('    builtin: {!r}'.format(builtin))
+                print_err('    resolved: {!r}'.format(resolved))
+                print_err(C(repr(self), 'normal'), '\n')
 
         return '\n\n'.join(
             t.formatted(dir_only=dir_only, short_mode=short_mode)
