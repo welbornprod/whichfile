@@ -18,10 +18,8 @@ import sys
 from contextlib import suppress
 from functools import cmp_to_key
 
-from fmtblock import FormatBlock
-
 NAME = 'WhichFile'
-VERSION = '0.7.1'
+VERSION = '1.0.2'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -32,12 +30,13 @@ USAGESTR = """{versionstr}
 
     Usage:
         {script} -h | -p | -v
-        {script} PATH... [-b | -B] [-c] [-C] [-D] [-N] [-s] [-w width]
+        {script} PATH... [-a | -B] [-c] [-C] [-D] [-N] [-s] [-w width]
         {script} PATH... [-d | -m] [-c] [-C] [-D] [-N] [-s] [-w width]
 
     Options:
         PATH                : Directory path or paths to resolve.
-        -b,--builtins       : Only show builtins when another binary exists.
+        -a,--all            : Show all aliases, functions, builtins, and
+                              file paths that were found.
         -B,--nobuiltins     : Don't check BASH builtins.
         -c,--ignorecwd      : Ignore files in the CWD, and try $PATH instead.
         -C,--color          : Use color, even when piping output.
@@ -58,6 +57,7 @@ USAGESTR = """{versionstr}
                               Broken symlinks will be prepended with 'dead:'.
         -v,--version        : Show version.
         -w num,--width num  : Maximum width for type information.
+                              Default: <terminal_width>
 """.format(script=SCRIPT, versionstr=VERSIONSTR)
 
 # debug is used before arg-parsing.
@@ -106,6 +106,7 @@ try:
         Colr as C,
         disabled as colr_disabled,
         enable as colr_enable,
+        get_terminal_size,
     )
     # Automatically disable colors when piping.
     colr_auto_disable()
@@ -116,6 +117,11 @@ try:
     from colr import docopt
 except ImportError as eximp:
     import_err('Docopt', eximp)
+
+try:
+    from fmtblock import FormatBlock
+except ImportError as eximp:
+    import_err('FormatBlock', eximp)
 
 try:
     import magic
@@ -164,114 +170,48 @@ def main(argd):
         print('\n'.join(paths))
         return 0 if paths else 1
 
-    no_builtins = argd['--nobuiltins'] or argd['--dir'] or argd['--mime']
-    possible_exes = argd['PATH'] if no_builtins else []
-    known_builtins = []
-    # Builtins have no directory, so --dir and --nobuiltins cancels this.
-    if not no_builtins:
-        # Check BASH builtins.
-        for cmdname in argd['PATH']:
-            bashmsg = get_bash_type(cmdname, short=False)
-            if not str_contains(bashmsg, ('alias', 'function', 'shell')):
-                possible_exes.append(cmdname)
-                continue
-            known_builtins.append(cmdname)
-            if not argd['--builtins']:
-                possible_exes.append(cmdname)
-            builtinhelp = get_bash_builtin_help(cmdname)
-            print(format_bash_builtin(
-                cmdname,
-                bashmsg,
-                helpmsg=builtinhelp,
-                short_mode=argd['--short']
-            ))
-    if no_builtins:
-        debug('Skipped builtins.')
-    else:
-        debug('Known builtins: {} -> {!r}'.format(
-            len(known_builtins),
-            known_builtins
-        ))
-
-    # Resolve all arguments.
-    errbins = []
-    for path in possible_exes:
-        resolved = ResolvedPath(
-            path,
-            use_mime=argd['--mime'],
+    resolved = ResolvedNames(
+        argd['PATH'],
+        ignore_cwd=argd['--ignorecwd'],
+        use_mime=argd['--mime'],
+        max_width=parse_int(argd['--width'], default=get_terminal_size()[0]),
+    )
+    print(resolved.formatted(
+        all_types=argd['--all'],
+        dir_only=argd['--dir'],
+        no_builtins=argd['--nobuiltins'] or argd['--dir'] or argd['--mime'],
+        short_mode=argd['--short'],
+    ))
+    errs = len(resolved.unresolved)
+    if errs and (not argd['--short']):
+        errs = print_err_cmds(
+            resolved.unresolved,
             ignore_cwd=argd['--ignorecwd'],
-            max_width=parse_int(argd['--width'], default=0)
         )
-        if resolved.exists:
-            if argd['--dir']:
-                resolved.print_dir()
-            elif argd['--short']:
-                resolved.print_target()
-            else:
-                resolved.print_all()
-        else:
-            errbins.append(path)
-
-    debug('Non exes: {} -> {!r}'.format(len(errbins), errbins))
-    # Check non-binary commands.
-    for cmdname, cmdline in get_bash_msgs(errbins).items():
-        if cmdline:
-            # Found an alias.
-            errbins.remove(cmdname)
-            print(format_bash_cmd(
-                cmdname,
-                cmdline,
-                dir_only=argd['--dir'],
-                short_mode=argd['--short']
-            ))
-
-    # If we found builtins earlier (and --builtins was not used), don't
-    # show them as an error.
-    for builtincmd in known_builtins:
-        try:
-            errbins.remove(builtincmd)
-        except ValueError:
-            # Happens when only the builtin was found, no exe.
-            pass
-
-    # Check for installable commands.
-    errs = len(errbins)
-    debug('Errors: {} -> {!r}'.format(errs, errbins))
-    if errbins and (not argd['--short']):
-        errs = print_err_cmds(errbins, ignore_cwd=argd['--ignorecwd'])
+    debug('Errors ({}): {!r}'.format(errs, resolved.unresolved))
     return errs
 
 
-def format_bash_builtin(cmdname, msg, helpmsg=None, short_mode=False):
-    """ Format a found bash builtin for printing. """
-    if short_mode:
-        return str(C(msg, **COLOR_ARGS['target']))
+def entry_point():
+    """ Entry point for setuptools, or script execution. """
+    try:
+        mainret = main(docopt(USAGESTR, version=VERSIONSTR, script=SCRIPT))
+    except InvalidArg as ex:
+        print_err(ex)
+        mainret = 1
+    except (EOFError, KeyboardInterrupt):
+        print_err('\nUser cancelled.\n', file=sys.stderr)
+        mainret = 2
+    except BrokenPipeError:
+        print_err(
+            '\nBroken pipe, input/output was interrupted.\n',
+            file=sys.stderr)
+        mainret = 3
+    except EnvironmentError as ex:
+        print_err('\n{}'.format(ex))
+        mainret = 1
 
-    if helpmsg:
-        return '\n{cmdname}:\n    ⯈ {msg}\n        Desc.: {helpmsg}'.format(
-            cmdname=C(cmdname, **COLOR_ARGS['cmd']),
-            msg=C(msg.replace('shell', 'BASH'), **COLOR_ARGS['target']),
-            helpmsg=C(helpmsg, **COLOR_ARGS['type'])
-        )
-
-    return '\n{cmdname}:\n    ⯈ {msg}'.format(
-        cmdname=C(cmdname, **COLOR_ARGS['cmd']),
-        msg=C(msg.replace('shell', 'BASH'), **COLOR_ARGS['type']),
-    )
-
-
-def format_bash_cmd(cmdname, matchline, dir_only=False, short_mode=False):
-    """ Format a found bash alias/function line for printing. """
-    if dir_only:
-        return str(C(os.path.split(ALIAS_FILE)[0], **COLOR_ARGS['target']))
-    if short_mode:
-        return str(C(ALIAS_FILE, **COLOR_ARGS['target']))
-
-    return '\n{fname}:\n    ⯈ {cmd}\n        ⯈ {line}'.format(
-        fname=C(ALIAS_FILE, **COLOR_ARGS['cmd']),
-        cmd=C(cmdname, **COLOR_ARGS['target']),
-        line=C(matchline, **COLOR_ARGS['type'])
-    )
+    sys.exit(mainret)
 
 
 def get_bash_builtin_help(name):
@@ -300,15 +240,15 @@ def get_bash_msgs(cmdnames, debug_name=False):
     if not ALIAS_FILE:
         debug('No alias file to work with, cancelling.')
         return {}
-    elif '/bash' not in os.environ.get('SHELL', ''):
+    elif 'bash' not in os.environ.get('SHELL', ''):
         debug('Not a BASH environment, cancelling.')
         return {}
     bashfuncfmt = r'(^function {cmd}\(?\)? ?{{?$)'
     cmdpatfmt = '({})'.format(
         '|'.join((
-            '(^alias {cmd}[ ]?)',
+            r'(^alias {cmd}=)',
             bashfuncfmt,
-            '(^{cmd}\(\)$)'
+            r'(^{cmd}\(\)$)'
         ))
     ).format
 
@@ -332,18 +272,18 @@ def get_bash_msgs(cmdnames, debug_name=False):
     with open(ALIAS_FILE, 'r') as f:
         for i, line in enumerate(f):
             lineno = i + 1
-            l = line.strip()
+            stripped = line.strip()
             for cmdname, cmdpat in cmdpats.items():
                 if cmdpat is None:
                     # Already found and added.
                     continue
-                match = cmdpat.search(l)
+                match = cmdpat.search(stripped)
                 if match is None:
-                    if debug_name and (cmdname in l):
+                    if debug_name and (cmdname in stripped):
                         debug('Missed {!r} for {!r} in {!r}'.format(
                             debug_name,
                             cmdname,
-                            l,
+                            stripped,
                         ))
                     continue
                 debug('Found alias/function: {}'.format(cmdname))
@@ -352,13 +292,13 @@ def get_bash_msgs(cmdnames, debug_name=False):
                 # this line for other commands.
                 cmdpats[cmdname] = None
                 cmdfuncpat = re.compile(bashfuncfmt.format(cmd=cmdname))
-                if l.startswith('alias'):
+                if stripped.startswith('alias'):
                     # The message for this alias is it's first line.
                     cmdmsgs[cmdname] = 'line {}: {}'.format(
                         lineno,
-                        l
+                        stripped
                     )
-                elif cmdfuncpat.search(l):
+                elif cmdfuncpat.search(stripped):
                     # The message for this function is the output of
                     # findfunc if available.
                     funcdefstr = run_find_func(cmdname, ALIAS_FILE)
@@ -366,7 +306,7 @@ def get_bash_msgs(cmdnames, debug_name=False):
                         # No findfunc available.
                         cmdmsgs[cmdname] = 'line {}: {}'.format(
                             lineno,
-                            l
+                            stripped
                         )
                     else:
                         cmdmsgs[cmdname] = 'line {}:\n{}'.format(
@@ -374,7 +314,9 @@ def get_bash_msgs(cmdnames, debug_name=False):
                             funcdefstr
                         )
                 else:
-                    raise ValueError('Non alias/function found: {}'.format(l))
+                    raise ValueError(
+                        'Non alias/function found: {}'.format(stripped)
+                    )
                 break
 
     return cmdmsgs
@@ -399,7 +341,7 @@ def get_bash_type(name, short=True):
         return ''
     output = rawoutput.decode().strip()
     if output:
-        debug('bash -t {}: {}'.format(name, output))
+        debug('{}: {}'.format(' '.join(typecmd), output))
     return output
 
 
@@ -441,7 +383,12 @@ def get_install_msg(cmdname, ignore_installed=True):
     if cmdname in CNF.getBlacklist():
         return None
 
-    packages = CNF.getPackages(cmdname)
+    getpkgs = getattr(CNF, 'getPackages', getattr(CNF, 'get_packages', None))
+    if getpkgs is None:
+        raise AttributeError(
+            'CommandNotFound is missing get_packages attribute!'
+        )
+    packages = getpkgs(cmdname)
     pkglen = len(packages)
     colr_args = {
         'cmd': {'fore': 'blue'},
@@ -481,7 +428,7 @@ def get_install_msg(cmdname, ignore_installed=True):
                 cmd=C(cmdname, **colr_args['cmd']),
                 pkg=C(packages[0][0], **colr_args['pkg'])
             )
-        if not packages[0][1] in CNF.sources_list:
+        if packages[0][1] and (packages[0][1] not in CNF.sources_list):
             msg = '\n'.join((
                 msg,
                 'You will have to enable the component called \'{}\''.format(
@@ -532,6 +479,7 @@ def get_install_msg(cmdname, ignore_installed=True):
 
         return '\n'.join(msg).format(cmd=C(cmdname, **colr_args['cmd']))
 
+
 def parse_int(s, default=None):
     """ Parse a string as an integer, returns `default` for falsey value.
         Raises InvalidArg with a message on invalid numbers.
@@ -544,6 +492,7 @@ def parse_int(s, default=None):
     except ValueError:
         raise InvalidArg('invalid number: {}'.format(s))
     return val
+
 
 def print_err(*args, **kwargs):
     """ Print an error message to stderr. """
@@ -707,10 +656,248 @@ class CircularLink(EnvironmentError):
         return links
 
 
+class Alias(object):
+    """ Holds info about a resolved alias. """
+    def __init__(self, filepath, name, typeinfo):
+        self.filepath = filepath
+        self.name = name
+        self.info = typeinfo
+
+    def __repr__(self):
+        return '{}(filepath={!r}, name={!r}, info={!r})'.format(
+            type(self).__name__,
+            self.filepath,
+            self.name,
+            self.info,
+        )
+
+    def formatted(self, dir_only=False, short_mode=False):
+        """ Printable/colorized representation of this Alias. """
+        if dir_only:
+            return str(C(
+                os.path.split(self.filepath)[0],
+                **COLOR_ARGS['target']
+            ))
+        if short_mode:
+            return str(C(self.filepath, **COLOR_ARGS['target']))
+
+        return '{fname}:\n    ⯈ {cmd}\n        ⯈ {line}'.format(
+            fname=C(self.filepath, **COLOR_ARGS['cmd']),
+            cmd=C(self.name, **COLOR_ARGS['target']),
+            line=C(self.info, **COLOR_ARGS['type'])
+        )
+
+
+class Builtin(Alias):
+    """ Holds info about a resolved bash builtin. """
+    def __init__(self, name, typestr):
+        self.filepath = None
+        self.name = name
+        self.info = typestr
+        # It's possible for builtin_type to stay None, if the name isn't found.
+        self.builtin_type = None
+        for s in ('builtin', 'keyword', 'alias', 'function'):
+            if s in typestr:
+                self.builtin_type = s
+                break
+        else:
+            if ' is ' in typestr:
+                self.builtin_type = 'file'
+                self.filepath = '{}'.format(typestr.rpartition('is ')[-1])
+        self.builtin_help = get_bash_builtin_help(name)
+
+    def __repr__(self):
+        return '\n'.join((
+            '{}(',
+            '    filepath={s.filepath!r},',
+            '    name={s.name!r},',
+            '    info={s.info!r},',
+            '    builtin_type={s.builtin_type!r},',
+            '    builtin_help={s.builtin_help!r},',
+            ')',
+        )).format(
+            type(self).__name__,
+            s=self,
+        )
+
+    def formatted(self, dir_only=False, short_mode=False):
+        """ Printable/colorized representation of this Builtin.
+            Arguments:
+                dir_only    : Not used at all, for compatibility with the other
+                              resolved classes.
+                short_mode  : Return only the info string.
+        """
+        if short_mode:
+            return str(C(self.info, **COLOR_ARGS['target']))
+
+        if self.builtin_help:
+            return '{name}:\n    ⯈ {msg}\n        Desc.: {helpmsg}'.format(
+                name=C(self.name, **COLOR_ARGS['cmd']),
+                msg=C(
+                    self.info.replace('shell', 'BASH'),
+                    **COLOR_ARGS['target']
+                ),
+                helpmsg=C(self.builtin_help, **COLOR_ARGS['type'])
+            )
+
+        return '{name}:\n    ⯈ {msg}'.format(
+            name=C(self.name, **COLOR_ARGS['cmd']),
+            msg=C(
+                self.info.replace('shell', 'BASH'),
+                **COLOR_ARGS['type']
+            ),
+        )
+
+
+class Function(Alias):
+    """ Holds info about a resolved function. """
+    pass
+
+
+class ResolvedNames(object):
+    """ Resolve a command/function/alias name as it would be interpreted
+        in the console.
+    """
+    def __init__(self, names, use_mime=False, ignore_cwd=False, max_width=0):
+        """
+            Arguments:
+                names (list(str)) : A list of str names to resolve.
+                use_mime (bool)   : Use mime type for file paths.
+                ignore_cwd (bool) : Ignore paths in CWD, and use search.
+                max_width (int)   : Maximum width for `type` string.
+        """
+        self.use_mime = use_mime or False
+        self.max_width = max(max_width or 0, 0)
+        self.ignore_cwd = ignore_cwd or False
+
+        self.names = names
+        self.unresolved = []
+        self.targets = self._locate()
+
+    def __repr__(self):
+        targetlines = []
+        for name, nameinfo in self.targets.items():
+            targetlines.append('    {!r}: {{'.format(name))
+            for typename, typeinfo in nameinfo.items():
+                typerepr = repr(typeinfo)
+                reprlines = []
+                for line in typerepr.split('\n'):
+                    if line.startswith('    ') or line.startswith(')'):
+                        reprlines.append('            {}'.format(line))
+                    else:
+                        reprlines.append(line)
+                reprstr = '\n'.join(reprlines)
+                targetlines.append('            {!r}: {},'.format(
+                    typename,
+                    reprstr,
+                ))
+            targetlines.append('        },')
+        targetstr = '\n'.join(targetlines)
+        return '\n'.join((
+            '{}('.format(type(self).__name__),
+            '    use_mime={s.use_mime},'.format(s=self),
+            '    ignore_cwd={s.ignore_cwd},'.format(s=self),
+            '    max_width={s.max_width},'.format(s=self),
+            '    names=[\n        {},\n    ],'.format(
+                ',\n        '.join(repr(s) for s in self.names)
+            ),
+            '    targets={{\n    {}\n    }},'.format(targetstr),
+            ')',
+        ))
+
+    def _locate(self):
+        """ Resolve this name to an alias, function, builtin, or file path.
+        """
+        targets = {}
+        # Check aliases/functions.
+        for name, typeinfo in get_bash_msgs(self.names).items():
+            if typeinfo is None:
+                # No alias/function info for this name.
+                continue
+            debug('Got bash alias/function info for: {!r}'.format(name))
+            targets.setdefault(name, {})
+            if ': alias' in typeinfo:
+                cls = Alias
+                typename = 'alias'
+            else:
+                cls = Function
+                typename = 'function'
+            targets[name][typename] = cls(ALIAS_FILE, name, typeinfo)
+
+        # Check bash builtins.
+        for name in self.names:
+            bashtype = get_bash_type(name, short=False)
+            if bashtype:
+                debug('Got bash builtin info for: {!r}'.format(name))
+                targets.setdefault(name, {})
+                targets[name]['builtin'] = Builtin(name, bashtype)
+
+        # Check file paths.
+        for name in self.names:
+            r = ResolvedPath(
+                name,
+                use_mime=self.use_mime,
+                ignore_cwd=self.ignore_cwd,
+                max_width=self.max_width,
+            )
+            if r.exists:
+                debug('Got file path info for: {!r}'.format(name))
+                targets.setdefault(name, {})
+                targets[name]['file'] = r
+            # If no info was set by now, it's unresolved.
+            if not targets.get(name, None):
+                debug('Unresolved: {!r}'.format(name))
+                self.unresolved.append(name)
+        return targets
+
+    def formatted(
+            self, all_types=False, dir_only=False,
+            no_builtins=False, short_mode=False):
+        """ Printable/colorized representation of this ResolvedNames. """
+        alltargets = []
+        for name, nameinfo in self.targets.items():
+            if all_types:
+                alltargets.extend(
+                    r
+                    for r in nameinfo.values()
+                    if getattr(r, 'builtin_type', '') != 'file'
+                )
+                # No precedence selection, just show all of them.
+                continue
+            alias = nameinfo.get('alias', nameinfo.get('function', None))
+            builtin = nameinfo.get('builtin', None)
+            # Skipping the builtin type if it is a 'file'.
+            if builtin and builtin.builtin_type == 'file':
+                builtin = None
+            resolved = nameinfo.get('file', None)
+            if alias:
+                # Prefer aliases.
+                alltargets.append(alias)
+            elif (not no_builtins) and builtin:
+                # A real builtin, it will be used before any file/link.
+                alltargets.append(builtin)
+            elif resolved:
+                # Just a file path (possibly a symlink).
+                alltargets.append(resolved)
+            else:
+                # Unhandled case.
+                print_err('\nUnhandled case in whichfile!:')
+                print_err('    alias: {!r}'.format(alias))
+                print_err('    builtin: {!r}'.format(builtin))
+                print_err('    resolved: {!r}'.format(resolved))
+                print_err(C(repr(self), 'normal'), '\n')
+
+        return '\n\n'.join(
+            t.formatted(dir_only=dir_only, short_mode=short_mode)
+            for t in alltargets
+        )
+
+
 class ResolvedPath(object):
 
     """ Resolve a single path, following any symlinks and determining
-        the file type.
+        the file type. This is for file paths only, not aliases or bash
+        builtins.
     """
 
     def __init__(self, path, use_mime=False, ignore_cwd=False, max_width=0):
@@ -761,62 +948,40 @@ class ResolvedPath(object):
             self._resolve()
 
     def __repr__(self):
-        """ Same as __str__() """
-        return self.__str__()
+        """ Print a correct representation of this class instance. """
+        if self.symlink_to:
+            symlinks = '[\n    {}\n    ],'.format(
+                ',\n        '.join(
+                    repr(s) for s in self.symlink_to,
+                )
+            )
+        else:
+            symlinks = '[],'
+        return '\n'.join((
+            '{}('.format(type(self).__name__),
+            '    path={s.path!r},',
+            '    use_mime={s.use_mime},',
+            '    max_width={s.max_width},',
+            '    circular={s.circular!r},',
+            '    exists={s.exists},',
+            '    broken={s.broken},',
+            '    symlink_to={symlinks},',
+            '    target={s.target!r},',
+            '    filetype={s.filetype!r},',
+            '    resolved={s.resolved},',
+            ')',
+        )).format(
+            s=self,
+            symlinks=symlinks,
+        )
 
     def __str__(self):
         """ Printable string representation of this resolved path. """
         if not self.exists:
             debug('__str__() on non-existing file.')
-            return ''
         if not self.resolved:
             debug('__str__() on unresolved file.')
-            return str(self.path)
-
-        lines = ['{}:'.format(C(self.path, **COLOR_ARGS['cmd']))]
-        indent = 4
-        linklen = len(self.symlink_to)
-        lastlink = linklen - 1
-        for i, symlink in enumerate(self.symlink_to):
-            linkstatus = ''
-            if self.circular:
-                if symlink == self.circular:
-                    linkstatus = C('⭠', 'red', style='bright')
-                else:
-                    linkstatus = ''
-            elif self._broken(symlink):
-                linkstatus = C('(broken)', fore='red')
-            elif not self._exists(symlink):
-                linkstatus = C('(missing)', fore='red')
-            else:
-                symlink = C(
-                    symlink,
-                    **COLOR_ARGS['target' if i == lastlink else 'link']
-                )
-            indention = ' ' * indent
-            lines.append('{}⯈ {} {}'.format(indention, symlink, linkstatus))
-            indent += 4
-
-        # Indent some more for labels.
-        indent += 7
-        if self.resolved:
-            typelbl = 'Type:'.rjust(indent)
-            if self.max_width > 0:
-                prepend=' ' * (len(typelbl) + 1)
-                typeinfo = FormatBlock(self.filetype).format(
-                    width=self.max_width,
-                    prepend=prepend,
-                    strip_first=True,
-                )
-            else:
-                typeinfo = self.filetype
-            lines.append(
-                '{} {}'.format(
-                    typelbl,
-                    C(typeinfo, **COLOR_ARGS['type'])
-                )
-            )
-        return '\n'.join(lines)
+        return self.formatted()
 
     def _broken(self, path=None):
         """ Determine if a path is a broken link. """
@@ -948,6 +1113,87 @@ class ResolvedPath(object):
             self.target = os.path.abspath(self.target or self.path)
         self.resolved = True
 
+    def formatted(self, dir_only=False, short_mode=False):
+        """ Printable/colorized string representation of this resolved path.
+        """
+        if not self.exists:
+            return ''
+        if not self.resolved:
+            return str(self.path)
+
+        if dir_only:
+            return self.formatted_dir()
+        if short_mode:
+            return self.formatted_target()
+
+        lines = ['{}:'.format(C(self.path, **COLOR_ARGS['cmd']))]
+        indent = 4
+        linklen = len(self.symlink_to)
+        lastlink = linklen - 1
+        for i, symlink in enumerate(self.symlink_to):
+            linkstatus = ''
+            if self.circular:
+                if symlink == self.circular:
+                    linkstatus = C('⭠', 'red', style='bright')
+                else:
+                    linkstatus = ''
+            elif self._broken(symlink):
+                linkstatus = C('(broken)', fore='red')
+            elif not self._exists(symlink):
+                linkstatus = C('(missing)', fore='red')
+            else:
+                symlink = C(
+                    symlink,
+                    **COLOR_ARGS['target' if i == lastlink else 'link']
+                )
+            indention = ' ' * indent
+            lines.append('{}⯈ {} {}'.format(indention, symlink, linkstatus))
+            indent += 4
+
+        # Indent some more for labels.
+        indent += 7
+        if self.resolved:
+            typelbl = 'Type:'.rjust(indent)
+            if self.max_width > 0:
+                prepend = ' ' * (len(typelbl) + 1)
+                typeinfo = FormatBlock(self.filetype).format(
+                    width=self.max_width,
+                    prepend=prepend,
+                    strip_first=True,
+                )
+            else:
+                typeinfo = self.filetype
+            lines.append(
+                '{} {}'.format(
+                    typelbl,
+                    C(typeinfo, **COLOR_ARGS['type'])
+                )
+            )
+        return '\n'.join(lines)
+
+    def formatted_dir(self):
+        """ Format the parent directory for self.target if it is set. """
+        if self.target:
+            pdir, _ = os.path.split(self.target)
+            if not pdir:
+                pdir = os.path.abspath(pdir)
+            return str(C(pdir, **COLOR_ARGS['target']))
+        return ''
+
+    def formatted_target(self):
+        """ Formats self.target if it is set.
+            Broken links will have 'dead:' prepended to them,
+            circular links will have 'circular' prepended to them.
+        """
+        if self.target:
+            if self.broken:
+                msg = 'circular' if self.circular else 'dead'
+                targetstr = '{}:{}'.format(msg, C(self.target, fore='red'))
+            else:
+                targetstr = C(self.target, **COLOR_ARGS['target'])
+            return str(targetstr)
+        return ''
+
     @classmethod
     def get_env_path(cls):
         """ Return a tuple of dirs in $PATH. """
@@ -965,24 +1211,18 @@ class ResolvedPath(object):
 
     def print_dir(self, end='\n'):
         """ Prints the parent directory for self.target if it is set. """
-        if self.target:
-            pdir, _ = os.path.split(self.target)
-            if not pdir:
-                pdir = os.path.abspath(pdir)
-            print(C(pdir, **COLOR_ARGS['target']), end=end)
+        s = self.formatted_dir()
+        if s:
+            print(s, end=end)
 
     def print_target(self, end='\n'):
         """ Prints self.target if it is set.
             Broken links will have 'dead:' prepended to them,
             circular links will have 'circular' prepended to them.
         """
-        if self.target:
-            if self.broken:
-                msg = 'circular' if self.circular else 'dead'
-                targetstr = '{}:{}'.format(msg, C(self.target, fore='red'))
-            else:
-                targetstr = C(self.target, **COLOR_ARGS['target'])
-            print(targetstr, end=end)
+        s = self.formatted_target()
+        if s:
+            print(s, end=end)
 
 
 class InvalidArg(ValueError):
@@ -997,21 +1237,4 @@ class InvalidArg(ValueError):
 
 
 if __name__ == '__main__':
-    try:
-        mainret = main(docopt(USAGESTR, version=VERSIONSTR, script=SCRIPT))
-    except InvalidArg as ex:
-        print_err(ex)
-        mainret = 1
-    except (EOFError, KeyboardInterrupt):
-        print_err('\nUser cancelled.\n', file=sys.stderr)
-        mainret = 2
-    except BrokenPipeError:
-        print_err(
-            '\nBroken pipe, input/output was interrupted.\n',
-            file=sys.stderr)
-        mainret = 3
-    except EnvironmentError as ex:
-        print_err('\n{}'.format(ex))
-        mainret = 1
-
-    sys.exit(mainret)
+    entry_point()
