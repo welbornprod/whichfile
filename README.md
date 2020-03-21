@@ -1,17 +1,17 @@
 # WhichFile
 
-### Basic Operation:
+## Basic Operation:
 
 This is a combination of the `which` and `file` commands.
 It will follow symlinks, reporting each link on the way, and then use
 `libmagic` to tell you what type of file it is. If you happen to be using
 `BASH`, this commands offers some of the same features as the `type` command,
-only prettier. Also, if [`findfunc`](https://github.com/welbornprod/findfunc)
-is installed, any bash functions will be syntax highlighted. On `apt`-based
-systems it will use the `CommandNotFound` module to show installable packages
-for missing commands.
+only prettier. Also, [findfunc](https://github.com/welbornprod/findfunc)
+is installed so any bash functions that is finds will be syntax highlighted.
+On `apt`-based systems it will use the `CommandNotFound` module to show
+installable packages for missing commands.
 
-##### Example:
+### Example:
 
 Determine where `rlogin` is linked, and what type of file it is:
 
@@ -19,7 +19,7 @@ Determine where `rlogin` is linked, and what type of file it is:
 whichfile rlogin
 ```
 
-###### Output:
+#### Output:
 ```
 /usr/bin/rlogin:
     -> /etc/alternatives/rlogin
@@ -110,7 +110,26 @@ Options:
     -v,--version     : Show version.
 ```
 
-## Demo
+## Installation:
+
+### Pip:
+**whichfile** is a PyPi package, and can be installed with pip:
+```bash
+pip install whichfile
+```
+
+This will create a `whichfile` executable that you can run.
+
+### Git:
+You can also clone the repo and do a manual install:
+```bash
+git clone https://github.com/welbornprod/whichfile.git
+
+cd whichfile
+python3 setup.py install --user
+```
+
+## Demo:
 
 This is a recording of several runs, showing WhichFile's output for the
 various types it can handle. Error output was included to show how installable

@@ -19,7 +19,7 @@ from contextlib import suppress
 from functools import cmp_to_key
 
 NAME = 'WhichFile'
-VERSION = '1.0.0'
+VERSION = '1.0.2'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
 SCRIPTDIR, SCRIPT = os.path.split(os.path.abspath(sys.argv[0]))
 
@@ -190,6 +190,28 @@ def main(argd):
         )
     debug('Errors ({}): {!r}'.format(errs, resolved.unresolved))
     return errs
+
+
+def entry_point():
+    """ Entry point for setuptools, or script execution. """
+    try:
+        mainret = main(docopt(USAGESTR, version=VERSIONSTR, script=SCRIPT))
+    except InvalidArg as ex:
+        print_err(ex)
+        mainret = 1
+    except (EOFError, KeyboardInterrupt):
+        print_err('\nUser cancelled.\n', file=sys.stderr)
+        mainret = 2
+    except BrokenPipeError:
+        print_err(
+            '\nBroken pipe, input/output was interrupted.\n',
+            file=sys.stderr)
+        mainret = 3
+    except EnvironmentError as ex:
+        print_err('\n{}'.format(ex))
+        mainret = 1
+
+    sys.exit(mainret)
 
 
 def get_bash_builtin_help(name):
@@ -1215,21 +1237,4 @@ class InvalidArg(ValueError):
 
 
 if __name__ == '__main__':
-    try:
-        mainret = main(docopt(USAGESTR, version=VERSIONSTR, script=SCRIPT))
-    except InvalidArg as ex:
-        print_err(ex)
-        mainret = 1
-    except (EOFError, KeyboardInterrupt):
-        print_err('\nUser cancelled.\n', file=sys.stderr)
-        mainret = 2
-    except BrokenPipeError:
-        print_err(
-            '\nBroken pipe, input/output was interrupted.\n',
-            file=sys.stderr)
-        mainret = 3
-    except EnvironmentError as ex:
-        print_err('\n{}'.format(ex))
-        mainret = 1
-
-    sys.exit(mainret)
+    entry_point()
