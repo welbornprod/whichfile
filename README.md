@@ -7,7 +7,7 @@ It will follow symlinks, reporting each link on the way, and then use
 `libmagic` to tell you what type of file it is. If you happen to be using
 `BASH`, this commands offers some of the same features as the `type` command,
 only prettier. Also, [findfunc](https://github.com/welbornprod/findfunc)
-is installed so any bash functions that is finds will be syntax highlighted.
+is installed so any bash functions that are found will be syntax highlighted.
 On `apt`-based systems it will use the `CommandNotFound` module to show
 installable packages for missing commands.
 

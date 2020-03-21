@@ -10,7 +10,7 @@ follow symlinks, reporting each link on the way, and then use
 using ``BASH``, this commands offers some of the same features as the
 ``type`` command, only prettier. Also,
 `findfunc <https://github.com/welbornprod/findfunc>`__ is installed so
-any bash functions that is finds will be syntax highlighted. On
+any bash functions that are found will be syntax highlighted. On
 ``apt``-based systems it will use the ``CommandNotFound`` module to show
 installable packages for missing commands.
 

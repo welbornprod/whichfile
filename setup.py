@@ -48,8 +48,8 @@ else:
             longdesc = shortdesc
 
 setup(
-    name='whichfile',
-    version='1.0.2',
+    name='WhichFile',
+    version='1.0.3',
     author='Christopher Welborn',
     author_email='cjwelborn@live.com',
     packages=['whichfile'],
