@@ -1,0 +1,2 @@
+v1.0.2 03/21/20 -- Always use findfunc, since it is easily installable.
+v1.0.1 03/21/20 -- First PyPi release.
