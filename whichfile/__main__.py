@@ -952,7 +952,7 @@ class ResolvedPath(object):
         if self.symlink_to:
             symlinks = '[\n    {}\n    ],'.format(
                 ',\n        '.join(
-                    repr(s) for s in self.symlink_to,
+                    (repr(s) for s in self.symlink_to),
                 )
             )
         else:
