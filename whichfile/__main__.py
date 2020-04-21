@@ -11,13 +11,18 @@
 """
 
 import os
-import posix
 import re
 import subprocess
 import sys
 from contextlib import suppress
 from functools import cmp_to_key
 
+try:
+    import posix
+    IS_ROOT = (posix.geteuid == 0)
+except ImportError:
+    # Windows...
+    IS_ROOT = False
 NAME = 'WhichFile'
 VERSION = '1.0.3'
 VERSIONSTR = '{} v. {}'.format(NAME, VERSION)
@@ -403,7 +408,7 @@ def get_install_msg(cmdname, ignore_installed=True):
             'The program \'{cmd}\' is currently not installed.',
             '    You can install it by typing: {installcmd}'
         ))
-        if posix.geteuid() == 0:
+        if IS_ROOT:
             # User is root.
             msg = msgfmt.format(
                 cmd=C(cmdname, **colr_args['cmd']),
@@ -459,7 +464,7 @@ def get_install_msg(cmdname, ignore_installed=True):
         installmsg = '    Try {{sudo}}{}'.format(
             C('apt install <selected package>', **colr_args['installcmd'])
         )
-        if posix.geteuid() == 0:
+        if IS_ROOT:
             msg.append(installmsg)
             return '\n'.join(msg).format(
                 cmd=cmdname,
